@@ -518,15 +518,34 @@ def select_failsafe(vm):
     return menu_png, fail_png
 
 
+def is_boot_menu(st):
+    """Menu frame, without OCR. OCR of the GRUB screen costs several seconds,
+    which is long enough for the 5s timeout to boot the default entry.
+    """
+    if is_desktop(st):
+        return False
+    # ISOLINUX: black splash, a highlight bar, a modest amount of text.
+    if 0.015 <= st["nonblack"] <= 0.25 and st["mid_bright"] >= 400 and st["bar"] >= 80:
+        return True
+    # GRUB gfxterm: full-frame background, bright title band, no GNOME top bar.
+    if st["nonblack"] >= 0.45 and st["bar"] >= 150 and st["bot"] >= 0.08 and st["top_bright"] < 40:
+        return True
+    return False
+
+
 def capture_menu(vm):
-    """Wait until the splash menu OCRs as Moor, show it ~3s, then select fail-safe."""
-    menu_at = None
+    """Screenshot the menu and select fail-safe before the 5s timeout.
+
+    The first Down is sent as soon as the menu is visible, which freezes the
+    countdown. Later shots (around 3s on BIOS) are taken after that.
+    """
     saved = set()
     series_at = {2, 3, 4, 5, 6, 8, 10, 12, 15, 18, 22}
     menu_png = None
     chosen = False
+    stable = 0
     while vm.elapsed() < 40 and vm.alive() and not chosen:
-        time.sleep(0.15)
+        time.sleep(0.12)
         mark = int(vm.elapsed())
         save_name = f"bootmenu-series-{mark:02d}s" if mark in series_at and mark not in saved else None
         st = vm.frame()
@@ -542,38 +561,46 @@ def capture_menu(vm):
         if is_desktop(st):
             print("desktop appeared before the menu was selected", flush=True)
             break
-        if menu_at is None:
-            if st["nonblack"] < 0.002 or not st.get("png"):
-                continue
-            text = ocr(st["png"]).lower()
-            print(f"t={vm.elapsed():.1f}s menu ocr: {text[:220]!r}", flush=True)
-            if "moor" in text and ("live" in text or "fail" in text):
-                menu_at = vm.elapsed()
-                # Keep the frame that OCR identified, before any key.
-                seen = os.path.join(OUT, f"{FW}-bootmenu-seen.png")
-                shutil.copy(st["png"], seen)
-                open(os.path.join(OUT, f"{FW}-bootmenu.txt"), "w").write(text)
-                count = re.search(r"in\s+(\d+)\s*(?:s\b|sec)", text)
-                # The OCR pass itself burns about a second of the countdown.
-                left = int(count.group(1)) - 1 if count else 3
-                # Leave time to press Down before the 5s timeout fires.
-                deadline = menu_at + max(0.3, left - 1.6)
-                target = min(menu_at + 2.2, deadline)
-                print(f"boot menu confirmed at t={menu_at:.1f}s countdown_left~{left}s "
-                      f"select_at~{target:.1f}s", flush=True)
-                while vm.elapsed() < target and vm.alive():
-                    time.sleep(0.25)
-                    mark = int(vm.elapsed())
-                    if mark in series_at and mark not in saved:
-                        snap = vm.frame()
-                        if snap and snap.get("png"):
-                            dest = os.path.join(OUT, f"{FW}-bootmenu-series-{mark:02d}s.png")
-                            shutil.copy(snap["png"], dest)
-                            saved.add(mark)
-                            print(f"t={vm.elapsed():.0f}s shot {dest}", flush=True)
-                menu_png, _fail = select_failsafe(vm)
-                chosen = True
+        if is_boot_menu(st):
+            stable += 1
+        else:
+            stable = 0
             continue
+        if stable < 2 or not st.get("png"):
+            continue
+        seen = os.path.join(OUT, f"{FW}-bootmenu-seen.png")
+        shutil.copy(st["png"], seen)
+        print(f"boot menu visible at t={vm.elapsed():.1f}s; stopping the timeout", flush=True)
+        # Down freezes the 5s countdown and moves to the serial entry.
+        vm.tap("down", hold=100)
+        time.sleep(0.35)
+        vm.shot("bootmenu-down1")
+        hold_until = vm.elapsed() + 1.6
+        while vm.elapsed() < hold_until and vm.alive():
+            time.sleep(0.25)
+            mark = int(vm.elapsed())
+            if mark in series_at and mark not in saved:
+                snap = vm.frame()
+                if snap and snap.get("png"):
+                    dest = os.path.join(OUT, f"{FW}-bootmenu-series-{mark:02d}s.png")
+                    shutil.copy(snap["png"], dest)
+                    saved.add(mark)
+                    print(f"t={vm.elapsed():.0f}s shot {dest}", flush=True)
+        vm.tap("down", hold=100)
+        time.sleep(0.4)
+        menu_png = vm.shot("bootmenu-failsafe")
+        # Also keep a copy under the name the report looks for.
+        if menu_png:
+            shutil.copy(menu_png, os.path.join(OUT, f"{FW}-bootmenu.png"))
+        elif os.path.exists(seen):
+            shutil.copy(seen, os.path.join(OUT, f"{FW}-bootmenu.png"))
+            menu_png = os.path.join(OUT, f"{FW}-bootmenu.png")
+        vm.tap("ret")
+        try:
+            open(os.path.join(OUT, f"{FW}-bootmenu.txt"), "w").write(ocr(seen))
+        except Exception as e:
+            print("menu ocr failed", e, flush=True)
+        chosen = True
     return chosen, menu_png
 
 
