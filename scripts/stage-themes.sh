@@ -24,18 +24,48 @@ rm -rf "$THEMES"/WhiteSur-* "$ICONS"/WhiteSur "$ICONS"/WhiteSur-dark "$ICONS"/Wh
        "$ICONS"/WhiteSur-cursors "$SKEL_GTK4" "$DOC"
 mkdir -p "$THEMES" "$ICONS" "$DOC" "$(dirname "$SKEL_GTK4")"
 
+# install.sh enables `set -e` and calls `setterm` for a spinner. With no tty
+# (the CI container) setterm fails and aborts the install. A no-op is enough.
+mkdir -p "$WORK_DIR/bin"
+printf '#!/bin/sh\nexit 0\n' > "$WORK_DIR/bin/setterm"
+chmod +x "$WORK_DIR/bin/setterm"
+PATH="$WORK_DIR/bin:$PATH"
+export PATH
+
 # GTK 2/3/4 + GNOME Shell: dark+light, solid (no transparency). With no
 # gnome-shell on the build host the script targets GNOME 48 (trixie ships 48).
 # -l installs the libadwaita (GTK4) CSS into $HOME/.config/gtk-4.0, so use a
 # throwaway HOME and copy the result into /etc/skel afterwards.
+#
+# WhiteSur's install.sh refuses -l when UID is 0 (it prints an error and skips
+# the CSS). The CI container is root, so drop privileges for that one install.
+# The links it writes are absolute paths under $HOME; rewrite them to relative
+# names so they still resolve after the tree is copied into the image.
 FAKEHOME="$WORK_DIR/fakehome"
 rm -rf "$FAKEHOME"; mkdir -p "$FAKEHOME/.config"
 log "installing WhiteSur GTK theme"
-( cd "$SRC/WhiteSur-gtk-theme" && HOME="$FAKEHOME" ./install.sh -d "$THEMES" -c dark -c light -o solid -l )
-if [ -d "$FAKEHOME/.config/gtk-4.0" ]; then
-  cp -a "$FAKEHOME/.config/gtk-4.0" "$SKEL_GTK4"
+# `su` resets PATH, so pass the no-op setterm directory explicitly.
+gtk_cmd="cd '$SRC/WhiteSur-gtk-theme' && PATH='$PATH' HOME='$FAKEHOME' ./install.sh -d '$THEMES' -c dark -c light -o solid -l"
+if [ "$(id -u)" -eq 0 ]; then
+  if ! id moorbuild >/dev/null 2>&1; then
+    useradd --create-home --user-group --shell /bin/sh moorbuild
+  fi
+  chown -R moorbuild:moorbuild "$THEMES" "$FAKEHOME" "$SRC/WhiteSur-gtk-theme"
+  su -s /bin/sh moorbuild -c "$gtk_cmd"
+  chown -R root:root "$THEMES" "$FAKEHOME" "$SRC/WhiteSur-gtk-theme"
 else
-  echo "WARNING: libadwaita gtk-4.0 CSS not produced; /etc/skel/.config/gtk-4.0 skipped" >&2
+  ( eval "$gtk_cmd" )
+fi
+if [ -d "$FAKEHOME/.config/gtk-4.0" ]; then
+  rm -rf "$SKEL_GTK4"
+  cp -a "$FAKEHOME/.config/gtk-4.0" "$SKEL_GTK4"
+  for link in "$SKEL_GTK4"/*; do
+    [ -L "$link" ] || continue
+    ln -sfn "$(basename "$(readlink "$link")")" "$link"
+  done
+else
+  echo "ERROR: libadwaita gtk-4.0 CSS not produced" >&2
+  exit 1
 fi
 
 log "installing WhiteSur icon theme"
