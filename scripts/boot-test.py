@@ -168,9 +168,11 @@ def analyze_ppm(path):
 
 
 def is_desktop(st):
-    # GNOME top bar (white clock/text) plus the bright bottom dock.
-    # Calibrated on a KVM frame of this image: top_bright ~219, bot ~0.044.
-    return st["top_bright"] >= 40 and st["bot"] >= 0.02
+    # GNOME top bar plus the bright bottom dock.
+    # A real frame of this image is about top_bright 220 and bot 0.044.
+    # A text console full of kernel lines is brighter in both bands
+    # (top_bright ~570, bot ~0.11) and must not count.
+    return 40 <= st["top_bright"] <= 450 and 0.02 <= st["bot"] <= 0.09
 
 
 def wait_stable(path, tries=80):
@@ -437,7 +439,22 @@ def wait_desktop(vm, limit, prefix):
     found_at = None
     png = None
     next_save = 30
+    tried_vt = False
     while vm.elapsed() < limit and vm.alive():
+        # Fail-safe uses vga=788, so the kernel log can stay on the first VT
+        # while GDM is on another. Look there once the log has had time to finish.
+        if prefix.startswith("failsafe") and not tried_vt and vm.elapsed() > 90:
+            tried_vt = True
+            for key in ("f2", "f1"):
+                vm.tap("ctrl", "alt", key, hold=120)
+                time.sleep(2.5)
+                st = vm.shot_stats(f"{prefix}-vt-{key}")
+                if st and is_desktop(st):
+                    print(f"t={vm.elapsed():.0f}s desktop on {key}", flush=True)
+                    time.sleep(4)
+                    st2 = vm.shot_stats(f"{prefix}-desktop")
+                    if st2 and is_desktop(st2):
+                        return vm.elapsed(), st2.get("png")
         time.sleep(5)
         save = vm.elapsed() >= next_save
         st = vm.shot_stats(f"{prefix}-t{int(vm.elapsed()):03d}s" if save else None)
@@ -449,14 +466,15 @@ def wait_desktop(vm, limit, prefix):
         print(f"t={vm.elapsed():.0f}s desktop? top={st['top_bright']} bot={st['bot']:.3f} "
               f"mid={st['mid_bright']}", flush=True)
         if is_desktop(st):
+            # Require the same signature on the next sample so a
+            # one-frame console flash cannot end the wait.
+            time.sleep(4)
+            st2 = vm.shot_stats(f"{prefix}-desktop")
+            if not st2 or not is_desktop(st2):
+                print(f"t={vm.elapsed():.0f}s desktop candidate did not hold", flush=True)
+                continue
             found_at = vm.elapsed()
-            if not save:
-                st = vm.shot_stats(f"{prefix}-desktop")
-                png = st.get("png") if st else png
-            elif png:
-                stable = os.path.join(OUT, f"{FW}-{prefix}-desktop.png")
-                shutil.copy(png, stable)
-                png = stable
+            png = st2.get("png") or png
             break
     return found_at, png
 
@@ -529,17 +547,33 @@ def capture_menu(vm):
                 continue
             text = ocr(st["png"]).lower()
             print(f"t={vm.elapsed():.1f}s menu ocr: {text[:220]!r}", flush=True)
-            if "moor" in text:
+            if "moor" in text and ("live" in text or "fail" in text):
                 menu_at = vm.elapsed()
-                print(f"boot menu confirmed at t={menu_at:.1f}s", flush=True)
+                # Keep the frame that OCR identified, before any key.
+                seen = os.path.join(OUT, f"{FW}-bootmenu-seen.png")
+                shutil.copy(st["png"], seen)
+                open(os.path.join(OUT, f"{FW}-bootmenu.txt"), "w").write(text)
+                count = re.search(r"in\s+(\d+)\s*(?:s\b|sec)", text)
+                # The OCR pass itself burns about a second of the countdown.
+                left = int(count.group(1)) - 1 if count else 3
+                # Leave time to press Down before the 5s timeout fires.
+                deadline = menu_at + max(0.3, left - 1.6)
+                target = min(menu_at + 2.2, deadline)
+                print(f"boot menu confirmed at t={menu_at:.1f}s countdown_left~{left}s "
+                      f"select_at~{target:.1f}s", flush=True)
+                while vm.elapsed() < target and vm.alive():
+                    time.sleep(0.25)
+                    mark = int(vm.elapsed())
+                    if mark in series_at and mark not in saved:
+                        snap = vm.frame()
+                        if snap and snap.get("png"):
+                            dest = os.path.join(OUT, f"{FW}-bootmenu-series-{mark:02d}s.png")
+                            shutil.copy(snap["png"], dest)
+                            saved.add(mark)
+                            print(f"t={vm.elapsed():.0f}s shot {dest}", flush=True)
+                menu_png, _fail = select_failsafe(vm)
+                chosen = True
             continue
-        age = vm.elapsed() - menu_at
-        print(f"menu age {age:.1f}s", flush=True)
-        # ~3s after the menu is identifiable, still inside the 5s timeout.
-        if age >= 2.8:
-            menu_png, _fail = select_failsafe(vm)
-            open(os.path.join(OUT, f"{FW}-bootmenu.txt"), "w").write(ocr(menu_png) if menu_png else "")
-            chosen = True
     return chosen, menu_png
 
 
@@ -547,11 +581,12 @@ def xorriso_find(iso, name):
     r = subprocess.run(["xorriso", "-indev", iso, "-find", "/", "-name", name],
                        capture_output=True, text=True)
     paths = []
-    for line in (r.stdout or "").splitlines():
-        line = line.strip()
+    blob = (r.stdout or "") + "\n" + (r.stderr or "")
+    for line in blob.splitlines():
+        line = line.strip().strip("'").strip('"')
         if line.startswith("/") and line.endswith(name):
             paths.append(line)
-    return paths
+    return paths, blob[-800:]
 
 
 def check_boot_configs():
@@ -564,20 +599,29 @@ def check_boot_configs():
         open(report, "w").write("xorriso is not installed\n")
         return False, report
     wanted = {
-        "grub.cfg": "/boot/grub/",
-        "live.cfg": "/isolinux/",
-        "isolinux.cfg": "/isolinux/",
+        "grub.cfg": ["/boot/grub/grub.cfg"],
+        "live.cfg": ["/isolinux/live.cfg"],
+        "isolinux.cfg": ["/isolinux/isolinux.cfg"],
     }
-    for name, hint in wanted.items():
-        found = xorriso_find(iso, name)
+    for name, guesses in wanted.items():
+        found, raw = xorriso_find(iso, name)
         lines.append(f"found {name}: {found or '(none)'}")
         if not found:
-            continue
-        src = next((p for p in found if hint in p), found[0])
-        r = subprocess.run(["xorriso", "-osirrox", "on", "-indev", iso, "-extract", src,
-                            os.path.join(dest, name)], capture_output=True, text=True)
-        if r.returncode != 0:
-            lines.append(f"extract {src} failed: {(r.stderr or '')[-400:]}")
+            lines.append(f"find raw {name}: {raw or '(empty)'}")
+        srcs = []
+        for guess in guesses + found:
+            if guess not in srcs:
+                srcs.append(guess)
+        for src in srcs:
+            out = os.path.join(dest, name)
+            r = subprocess.run(["xorriso", "-osirrox", "on", "-indev", iso, "-extract", src, out],
+                               capture_output=True, text=True)
+            if os.path.exists(out) and os.path.getsize(out) > 0 and r.returncode == 0:
+                lines.append(f"extracted {src}")
+                break
+            lines.append(f"extract {src} failed rc={r.returncode}: {((r.stderr or '') + (r.stdout or ''))[-300:]}")
+            if os.path.exists(out):
+                os.unlink(out)
     grub_line = live_line = ""
     grub = os.path.join(dest, "grub.cfg")
     live = os.path.join(dest, "live.cfg")
@@ -619,7 +663,7 @@ def run_failsafe():
         open(os.path.join(OUT, f"{FW}-failsafe-console-ocr.txt"), "w").write(ocr_text)
         blob = text + "\n" + ocr_text
         return {
-            "menu_captured": bool(menu_png),
+            "menu_captured": bool(menu_png) or os.path.exists(os.path.join(OUT, f"{FW}-bootmenu-seen.png")),
             "menu_png": os.path.basename(menu_png) if menu_png else None,
             "failsafe_selected": chosen,
             "failsafe_desktop": desk_at is not None,
@@ -677,7 +721,7 @@ def run_default():
             "moor_8s": os.path.basename(moor8) if moor8 else None,
             "moor_20s": os.path.basename(moor20) if moor20 else None,
             "files_png": os.path.basename(files_png) if files_png else None,
-            "terminal_png": "terminal.png" if os.path.exists(os.path.join(OUT, f"{FW}-terminal.png")) else None,
+            "terminal_png": f"{FW}-terminal.png" if os.path.exists(os.path.join(OUT, f"{FW}-terminal.png")) else None,
             "keyring_dialog_ocr": keyring,
         }
     finally:
