@@ -599,13 +599,15 @@ def one_run(iso, out, profile, mem, smp, accel, settle_s):
             menu_ok = select_menu(vm, 3)
         desk_at, desk_png = wait_desktop(vm, 240)
         if desk_at is None:
-            print("desktop was not detected before the idle wait", flush=True)
+            # A missed heuristic must not skip the idle wait. The search already
+            # ran; this is the same two-minute settle the detected path uses.
+            print("desktop was not detected; settling anyway before the probe", flush=True)
             vm.shot("no-desktop")
         else:
             print(f"desktop at t={desk_at:.0f}s; settling {settle_s}s", flush=True)
-            end = time.time() + settle_s
-            while time.time() < end and vm.alive():
-                time.sleep(5)
+        end = time.time() + settle_s
+        while time.time() < end and vm.alive():
+            time.sleep(5)
         vm.shot("idle-before-probe")
         port_box = {}
         listen_for_done(port_box)
@@ -657,6 +659,7 @@ def one_run(iso, out, profile, mem, smp, accel, settle_s):
             "desktop_detected": desk_at is not None,
             "desktop_at_s": None if desk_at is None else round(desk_at, 1),
             "settle_s": settle_s,
+            "settled": True,
             "ps_mem_staged": ps_mem_ok,
             "probe_tcp": "PROBE_DONE" in (port_box.get("data") or ""),
             "free": free,
