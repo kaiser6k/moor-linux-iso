@@ -501,36 +501,20 @@ def launch(vm, command, stem, wait_s):
     return vm.shot(stem)
 
 
-def select_failsafe(vm):
-    """Screenshot the untouched menu, then Down, Down, Enter.
-
-    Menu order on both firmware images is Live, serial console, fail-safe.
-    The first Down also stops the 5s timeout.
-    """
-    menu_png = vm.shot("bootmenu")
-    vm.tap("down", hold=100)
-    time.sleep(0.45)
-    vm.shot("bootmenu-down1")
-    vm.tap("down", hold=100)
-    time.sleep(0.45)
-    fail_png = vm.shot("bootmenu-failsafe")
-    vm.tap("ret")
-    return menu_png, fail_png
-
-
 def is_boot_menu(st):
     """Menu frame, without OCR. OCR of the GRUB screen costs several seconds,
     which is long enough for the 5s timeout to boot the default entry.
     """
     if is_desktop(st):
         return False
-    # ISOLINUX: black splash, a highlight bar, a modest amount of text.
-    if 0.015 <= st["nonblack"] <= 0.25 and st["mid_bright"] >= 400 and st["bar"] >= 80:
-        return True
-    # GRUB gfxterm: full-frame background, bright title band, no GNOME top bar.
-    if st["nonblack"] >= 0.45 and st["bar"] >= 150 and st["bot"] >= 0.08 and st["top_bright"] < 40:
-        return True
-    return False
+    if FW == "bios":
+        # ISOLINUX: black splash, a highlight bar, a modest amount of text.
+        return 0.015 <= st["nonblack"] <= 0.25 and st["mid_bright"] >= 400 and st["bar"] >= 80
+    # UEFI GRUB gfxterm only. The TianoCore logo is sparse (nonblack ~0.02)
+    # and was being mistaken for the isolinux menu.
+    # mid_bright drops to 0 once GRUB has already started an entry.
+    return (st["nonblack"] >= 0.45 and st["mid_bright"] >= 300 and st["bar"] >= 150
+            and st["bot"] >= 0.08 and st["top_bright"] < 40)
 
 
 def capture_menu(vm):
