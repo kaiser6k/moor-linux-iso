@@ -84,5 +84,16 @@ https://github.com/vinceliuice/WhiteSur-icon-theme $ICON_COMMIT  (GPL-3.0)
 https://github.com/vinceliuice/WhiteSur-cursors    $CURSORS_COMMIT  (GPL-3.0)
 INFO
 
+# Plank theme from the same WhiteSur tree (other/plank/theme-Dark/dock.theme).
+# Installed as WhiteSur-Dark, which the Xfce lite dock requests.
+PLANK_SRC="$SRC/WhiteSur-gtk-theme/other/plank/theme-Dark"
+if [ ! -f "$PLANK_SRC/dock.theme" ]; then
+  echo "ERROR: WhiteSur plank theme missing at $PLANK_SRC" >&2
+  exit 1
+fi
+mkdir -p "$CHROOT_INC/usr/share/plank/themes/WhiteSur-Dark"
+cp -a "$PLANK_SRC/." "$CHROOT_INC/usr/share/plank/themes/WhiteSur-Dark/"
+log "staged Plank theme WhiteSur-Dark"
+
 ls "$THEMES" "$ICONS"
 log "themes staged into $CHROOT_INC"

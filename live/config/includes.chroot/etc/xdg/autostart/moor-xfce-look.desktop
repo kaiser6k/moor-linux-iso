@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Moor Xfce look
+Exec=/usr/local/bin/moor-xfce-look
+OnlyShowIn=XFCE;
+NoDisplay=true
+X-GNOME-Autostart-enabled=false

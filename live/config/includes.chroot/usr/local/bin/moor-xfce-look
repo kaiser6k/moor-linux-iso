@@ -1,0 +1,29 @@
+#!/bin/sh
+# WhiteSur + the Moor fjord wallpaper on the Xfce session. Skel xfconf covers
+# the theme; the wallpaper property name depends on the monitor, so set every
+# last-image key xfdesktop already created, and a few common names otherwise.
+set -eu
+xfconf-query -c xsettings -p /Net/ThemeName -s 'WhiteSur-Dark-solid' \
+  || xfconf-query -c xsettings -p /Net/ThemeName -n -t string -s 'WhiteSur-Dark-solid'
+xfconf-query -c xsettings -p /Net/IconThemeName -s 'WhiteSur-dark' \
+  || xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s 'WhiteSur-dark'
+xfconf-query -c xsettings -p /Gtk/CursorThemeName -s 'WhiteSur-cursors' \
+  || xfconf-query -c xsettings -p /Gtk/CursorThemeName -n -t string -s 'WhiteSur-cursors'
+xfconf-query -c xfwm4 -p /general/theme -s 'WhiteSur-Dark-solid' \
+  || xfconf-query -c xfwm4 -p /general/theme -n -t string -s 'WhiteSur-Dark-solid'
+xfconf-query -c xfwm4 -p /general/use_compositing -s false \
+  || xfconf-query -c xfwm4 -p /general/use_compositing -n -t bool -s false
+
+wall=/usr/share/backgrounds/moor/fjord.jpg
+props=$(xfconf-query -c xfce4-desktop -l 2>/dev/null | grep '/last-image$' || true)
+if [ -n "$props" ]; then
+  printf '%s\n' "$props" | while read -r p; do
+    xfconf-query -c xfce4-desktop -p "$p" -s "$wall" || true
+  done
+else
+  for mon in monitor0 monitorVirtual-1 monitorVirtual1 monitorVGA-1 monitorHDMI-1; do
+    base="/backdrop/screen0/${mon}/workspace0"
+    xfconf-query -c xfce4-desktop -p "$base/last-image" -n -t string -s "$wall" || true
+    xfconf-query -c xfce4-desktop -p "$base/image-style" -n -t int -s 5 || true
+  done
+fi

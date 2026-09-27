@@ -11,6 +11,9 @@ on:
       - "scripts/lib.sh"
       - "patches/**"
       - "iso-overrides/**"
+      - ".github/workflows/build-iso.yml"
+      - "scripts/idle-ram.py"
+      - "scripts/guest-idle-ram.sh"
   pull_request:
     paths:
       - "live/**"
@@ -19,6 +22,9 @@ on:
       - "scripts/lib.sh"
       - "patches/**"
       - "iso-overrides/**"
+      - ".github/workflows/build-iso.yml"
+      - "scripts/idle-ram.py"
+      - "scripts/guest-idle-ram.sh"
 
 concurrency:
   group: build-iso-${{ github.ref }}
@@ -26,6 +32,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   build:
@@ -143,3 +150,108 @@ jobs:
             live/build.log
           retention-days: 14
           if-no-files-found: ignore
+
+  # Current main ISO, three idle samples. Runs in parallel with the image build.
+  baseline-ram:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve main build run
+        id: run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow build-iso.yml --branch main \
+                 --status success --limit 1 --json databaseId -q '.[0].databaseId')
+          echo "Testing baseline ISO from build run $id"
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+      - name: Download main ISO artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: moor-linux-iso
+          path: iso
+          run-id: ${{ steps.run.outputs.id }}
+          github-token: ${{ github.token }}
+
+      - name: Install QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils python3
+          if [ -e /dev/kvm ]; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+            sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm || true
+          fi
+
+      - name: Verify checksum
+        working-directory: iso
+        run: sha256sum -c *.sha256
+
+      - name: Idle RAM (baseline, 3 runs)
+        run: |
+          iso=$(ls iso/*.iso | head -n1)
+          python3 scripts/idle-ram.py --iso "$iso" --profile gnome --label baseline \
+            --runs 3 --settle 120 --out idle-ram
+
+      - name: Upload idle RAM raw output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: idle-ram-baseline
+          path: idle-ram/
+          retention-days: 14
+          if-no-files-found: warn
+
+  # GNOME-lean (default entry) and Xfce-lite on the ISO this workflow just built.
+  idle-ram:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: gnome
+            label: gnome-lean
+          - profile: xfce
+            label: xfce-lite
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download ISO artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: moor-linux-iso
+          path: iso
+
+      - name: Install QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils python3
+          if [ -e /dev/kvm ]; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+            sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm || true
+          fi
+
+      - name: Verify checksum
+        working-directory: iso
+        run: sha256sum -c *.sha256
+
+      - name: Idle RAM (${{ matrix.label }}, 3 runs)
+        run: |
+          iso=$(ls iso/*.iso | head -n1)
+          python3 scripts/idle-ram.py --iso "$iso" --profile ${{ matrix.profile }} \
+            --label ${{ matrix.label }} --runs 3 --settle 120 --out idle-ram
+
+      - name: Upload idle RAM raw output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: idle-ram-${{ matrix.label }}
+          path: idle-ram/
+          retention-days: 14
+          if-no-files-found: warn

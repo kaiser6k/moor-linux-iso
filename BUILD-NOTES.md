@@ -86,7 +86,7 @@ lb config noauto --mode debian --distribution trixie --architectures amd64 \
 - `includes.binary/{isolinux,boot/grub}/splash.png`: a plain "Moor Linux" text splash. No Debian logo.
 
 ### Evolution data server
-It **stays**. gnome-core and gnome-shell depend on evolution-data-server, and gnome-shell's clock/calendar menu D-Bus-activates `evolution-source-registry`, `evolution-calendar-factory`, and `evolution-addressbook-factory` (seen running in the test, about 60 MB RSS for the source registry). Only the alarm-notify autostart was removed. Masking the factories would risk calendar-menu errors, and I didn't test that.
+The packages stay, because gnome-shell depends on them. The user units (`evolution-source-registry`, `evolution-calendar-factory`, `evolution-addressbook-factory`, `evolution-alarm-notify`) are masked, and the alarm-notify autostart is removed. The calendar menu can be empty. The idle-RAM job is what shows whether the session still comes up.
 
 ## WhiteSur (vinceliuice), installed system-wide at build time
 | Repo | Commit | Date | License | Installed as |
@@ -167,7 +167,13 @@ The v2 local builds were OOM-killed during the chroot package install on the sha
 - Reason not to default to it now: backports kernels move fast and get less testing, and a newer kernel isn't needed to reach a working desktop.
 - A dual-GPU caveat: with both the 680M and the B580 active, mutter picks the GPU driving the primary display as the render device. If the monitor is on the B580, GNOME renders there.
 
-## Fallback design (NOT built): Xfce variant with the same WhiteSur look
+## Xfce lite (boot menu entry)
+
+Built as **Moor Linux Lite (Xfce)** on the same ISO, not a second image. Kernel cmdline `moor.session=xfce` makes `/usr/local/sbin/moor-display-manager` exec LightDM; the default entry still execs GDM. WhiteSur GTK/icons/cursors/xfwm, Plank (`WhiteSur-Dark`) at the bottom, fjord wallpaper, compositor off. Plank's autostart is `OnlyShowIn=XFCE` so the GNOME session keeps Dash to Dock only.
+
+The earlier "450–650 MB" sentence was an estimate and is not a measurement. Idle RAM is the CI table in `docs/VPS-NESTED-VM.md`.
+
+## Fallback design notes (the shape that was built): Xfce variant with the same WhiteSur look
 - **Packages:** `xfce4 xfce4-terminal thunar xfce4-whiskermenu-plugin xfce4-pulseaudio-plugin network-manager-gnome lightdm lightdm-gtk-greeter plank xserver-xorg-core xserver-xorg-input-libinput` + the same Mesa, firmware, chromium, and nginx sets. This is X11: Xfce 4.20 on Wayland is still experimental.
 - **Dock:** Plank (`plank`, WhiteSur ships a `plank` theme in `themes/WhiteSur-Dark-solid/plank`). You can also use a second `xfce4-panel` at the bottom with the docklike plugin (`xfce4-docklike-plugin`) for a more integrated look. The top xfce4-panel stays as the menu bar.
 - **Theme:** the same system-wide WhiteSur install. `/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml` sets Net/ThemeName=WhiteSur-Dark-solid, Net/IconThemeName=WhiteSur-dark, and Gtk/CursorThemeName=WhiteSur-cursors. Put xfwm4 `theme=WhiteSur-Dark-solid` in `xfwm4.xml` (WhiteSur ships an `xfwm4` dir) and the Plank autostart in `/etc/xdg/autostart/plank.desktop`.

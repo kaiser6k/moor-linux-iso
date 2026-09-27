@@ -1,0 +1,8 @@
+[net/launchpad/plank/docks/dock1]
+theme='WhiteSur-Dark'
+position='bottom'
+alignment='center'
+icon-size=48
+hide-mode='none'
+zoom-enabled=false
+zoom-percent=100
