@@ -32,7 +32,7 @@ app mode.
 | `iso-overrides/linux-vm.html` | Static replacement for Moor's CheerpX page |
 | `scripts/build-moor.sh` | Clones moor-linux at a pinned commit, applies the patch, builds, and stages it into `includes.chroot` |
 | `scripts/stage-themes.sh` | Fetches WhiteSur at pinned commits and installs it into `includes.chroot` |
-| `scripts/boot-test.py` | Headless QEMU boot test with QMP screendumps |
+| `scripts/boot-test.py` | Headless QEMU boot test: menus, fail-safe, session text, app screenshots |
 | `.github/workflows/build-iso.yml` | CI build |
 | `.github/workflows/boot-test.yml` | Optional QEMU boot test on the built artifact |
 | `BUILD-NOTES.md` | Detailed build notes, test results, hardware notes |
@@ -50,9 +50,11 @@ runs `lb build`, and uploads these artifacts (kept for 14 days):
 - **`build-log`**: the live-build log
 
 Download them from the workflow run page (Actions → Build ISO → run →
-Artifacts). `boot-test.yml` runs after a successful build, or manually. It
-boots the ISO in QEMU (BIOS and UEFI, KVM if available, otherwise TCG) and
-uploads screenshots taken at 60/120/180/240 s.
+Artifacts). `boot-test.yml` runs after a successful build, on pull requests,
+or manually (`run_id` selects which build artifact to boot). It boots the ISO
+in QEMU (BIOS and UEFI, KVM if available, otherwise TCG) and uploads the boot
+menu, a fail-safe desktop boot, an idle default session (`whoami`, `free -m`,
+`/etc/os-release`), and screenshots of Moor, Files, and Terminal.
 
 A build needs about 14 GB of free disk. The standard runner has enough.
 

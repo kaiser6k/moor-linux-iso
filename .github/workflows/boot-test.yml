@@ -6,9 +6,15 @@ on:
       run_id:
         description: "Build ISO run ID to test (blank = latest successful run on main)"
         required: false
+        type: string
   workflow_run:
     workflows: ["Build ISO"]
     types: [completed]
+  pull_request:
+
+concurrency:
+  group: boot-test-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -16,9 +22,9 @@ permissions:
 
 jobs:
   boot:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -40,6 +46,7 @@ jobs:
             id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow build-iso.yml --branch main \
                    --status success --limit 1 --json databaseId -q '.[0].databaseId')
           fi
+          echo "Testing ISO from build run $id"
           echo "id=$id" >> "$GITHUB_OUTPUT"
 
       - name: Download ISO artifact
@@ -53,7 +60,7 @@ jobs:
       - name: Install QEMU + OVMF
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf qemu-utils imagemagick python3
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf qemu-utils python3 xorriso tesseract-ocr
           ls /usr/share/OVMF/ || true
           # Enable KVM for the runner user if the host exposes it.
           if [ -e /dev/kvm ]; then
@@ -68,8 +75,7 @@ jobs:
       - name: Boot ${{ matrix.firmware }}
         run: |
           iso=$(ls iso/*.iso | head -n1)
-          python3 scripts/boot-test.py --iso "$iso" --firmware ${{ matrix.firmware }} \
-            --out screenshots --duration 240 --shots 60,120,180,240
+          python3 scripts/boot-test.py --iso "$iso" --firmware ${{ matrix.firmware }} --out screenshots
 
       - name: Upload screenshots
         if: always()

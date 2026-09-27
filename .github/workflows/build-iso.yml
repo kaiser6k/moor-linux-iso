@@ -4,7 +4,21 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    paths:
+      - "live/**"
+      - "scripts/build-moor.sh"
+      - "scripts/stage-themes.sh"
+      - "scripts/lib.sh"
+      - "patches/**"
+      - "iso-overrides/**"
   pull_request:
+    paths:
+      - "live/**"
+      - "scripts/build-moor.sh"
+      - "scripts/stage-themes.sh"
+      - "scripts/lib.sh"
+      - "patches/**"
+      - "iso-overrides/**"
 
 concurrency:
   group: build-iso-${{ github.ref }}
