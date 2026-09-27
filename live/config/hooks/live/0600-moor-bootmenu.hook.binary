@@ -1,0 +1,42 @@
+#!/bin/sh
+# Runs in the binary/ tree before the ISO is written.
+set -e
+for f in boot/grub/grub.cfg isolinux/*.cfg; do
+  [ -f "$f" ] || continue
+  sed -i -e 's/Live system (autodetect)/Moor Linux Live/g' \
+         -e 's/Live system (amd64 fail-safe mode)/Moor Linux Live (fail-safe mode)/g' \
+         -e "s/boot=live components memtest/boot=live components username=moor hostname=moor memtest/" \
+         -e 's/Live system (amd64)/Moor Linux Live/g' \
+         -e 's/Live system, kernel/Moor Linux Live, kernel/g' \
+         -e 's/\^Live system/^Moor Linux Live/g' \
+         -e 's/menu title Boot menu/menu title Moor Linux/' "$f"
+done
+[ -f isolinux/isolinux.cfg ] && sed -i 's/^timeout 0/timeout 50/' isolinux/isolinux.cfg
+if [ -f boot/grub/config.cfg ] && ! grep -q '^set timeout' boot/grub/config.cfg; then
+  echo 'set timeout=5' >> boot/grub/config.cfg
+fi
+grep -h -E 'menuentry|menu label|timeout' boot/grub/grub.cfg boot/grub/config.cfg isolinux/*.cfg 2>/dev/null || true
+
+# Second entry: same as the default but with a serial console on ttyS0 (debug/CI).
+if [ -f boot/grub/grub.cfg ] && ! grep -q 'serial console' boot/grub/grub.cfg; then
+  awk 'BEGIN{state=0}
+       { print }
+       state==0 && /^menuentry "Moor Linux Live"/ { state=1; blk=$0 "\n"; next }
+       state==1 { blk=blk $0 "\n"; if ($0 ~ /^}/) { state=2;
+           sub(/menuentry "Moor Linux Live"[^{]*\{/, "menuentry \"Moor Linux Live (serial console)\" {", blk);
+           gsub(/boot=live/, "boot=live console=ttyS0,115200 console=tty0", blk);
+           printf "%s", blk } }' boot/grub/grub.cfg > boot/grub/grub.cfg.new
+  mv boot/grub/grub.cfg.new boot/grub/grub.cfg
+fi
+if [ -f isolinux/live.cfg ] && ! grep -q 'serial console' isolinux/live.cfg; then
+  awk 'BEGIN{state=0}
+       { print }
+       state==0 && /^label / { state=1; blk=""; next }
+       state==1 { if ($0 ~ /^[[:space:]]*$/) { state=2;
+           printf "label live-serial\n\tmenu label Moor Linux Live (serial console)\n%s\n", blk; next }
+         if ($0 ~ /menu default/) next;
+         if ($0 ~ /menu label/) next;
+         line=$0; gsub(/boot=live/, "boot=live console=ttyS0,115200 console=tty0", line); blk=blk line "\n" }' isolinux/live.cfg > isolinux/live.cfg.new
+  mv isolinux/live.cfg.new isolinux/live.cfg
+fi
+echo "--- final grub.cfg ---"; cat boot/grub/grub.cfg; echo "--- final live.cfg ---"; cat isolinux/live.cfg

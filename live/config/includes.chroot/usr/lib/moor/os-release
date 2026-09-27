@@ -1,0 +1,7 @@
+PRETTY_NAME="Moor Linux 1 (Phase 1 live)"
+NAME="Moor Linux"
+VERSION_ID="1"
+VERSION="1 (Phase 1 live)"
+ID=moor
+ID_LIKE=debian
+HOME_URL="https://github.com/kaiser6k/moor-linux"

@@ -1,0 +1,9 @@
+Moor Linux (Phase 1 live image)
+
+Moor Linux is based on Debian 13 ("trixie") packages.
+Moor Linux is not affiliated with Debian. Debian is a registered trademark
+owned by Software in the Public Interest, Inc.
+
+The Moor web app (/opt/moor/www) is MIT licensed; see ./copyright.
+WhiteSur themes by vinceliuice; licenses in /usr/share/doc/whitesur-themes/.
+The in-browser CheerpX Linux VM is not included in this build.

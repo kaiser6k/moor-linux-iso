@@ -1,0 +1,6 @@
+#!/bin/sh
+# Called by `lb clean`; also drop the files `lb config` generates.
+set -e
+lb clean noauto "$@"
+rm -f config/binary config/bootstrap config/chroot config/common config/source
+rm -f build.log

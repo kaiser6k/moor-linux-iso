@@ -1,0 +1,4 @@
+# Moor Linux: compressed RAM swap
+ALGO=zstd
+PERCENT=50
+PRIORITY=100

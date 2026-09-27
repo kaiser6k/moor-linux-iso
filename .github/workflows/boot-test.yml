@@ -1,0 +1,81 @@
+name: Boot test (QEMU)
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Build ISO run ID to test (blank = latest successful run on main)"
+        required: false
+  workflow_run:
+    workflows: ["Build ISO"]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  boot:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        firmware: [bios, uefi]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve build run
+        id: run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            id="${{ github.event.workflow_run.id }}"
+          elif [ -n "${{ inputs.run_id }}" ]; then
+            id="${{ inputs.run_id }}"
+          else
+            id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow build-iso.yml --branch main \
+                   --status success --limit 1 --json databaseId -q '.[0].databaseId')
+          fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+      - name: Download ISO artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: moor-linux-iso
+          path: iso
+          run-id: ${{ steps.run.outputs.id }}
+          github-token: ${{ github.token }}
+
+      - name: Install QEMU + OVMF
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf qemu-utils imagemagick python3
+          ls /usr/share/OVMF/ || true
+          # Enable KVM for the runner user if the host exposes it.
+          if [ -e /dev/kvm ]; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+            sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm || true
+          fi
+
+      - name: Verify checksum
+        working-directory: iso
+        run: sha256sum -c *.sha256
+
+      - name: Boot ${{ matrix.firmware }}
+        run: |
+          iso=$(ls iso/*.iso | head -n1)
+          python3 scripts/boot-test.py --iso "$iso" --firmware ${{ matrix.firmware }} \
+            --out screenshots --duration 240 --shots 60,120,180,240
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-screenshots-${{ matrix.firmware }}
+          path: screenshots/
+          retention-days: 14
+          if-no-files-found: warn

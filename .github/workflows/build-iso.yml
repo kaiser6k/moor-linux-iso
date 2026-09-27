@@ -1,0 +1,113 @@
+name: Build ISO
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: build-iso-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    # live-build needs chroot, mount and loop devices -> privileged container.
+    # Host disk-cleanup actions can't run inside a container; the ~14 GB free on
+    # a standard runner was enough for build 1 (~1.4 GB ISO).
+    container:
+      image: debian:trixie
+      options: --privileged
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install build dependencies
+        run: |
+          set -eux
+          printf 'Acquire::Retries "10";\nAcquire::http::Timeout "30";\n' > /etc/apt/apt.conf.d/80-retries
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            live-build debootstrap xorriso squashfs-tools \
+            grub-efi-amd64-bin grub-pc-bin mtools dosfstools \
+            git ca-certificates curl rsync xz-utils \
+            sassc libxml2-utils glib2.0-bin gtk-update-icon-cache
+          df -h / || true
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Mark workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Stage Moor web app (pinned kaiser6k/moor-linux + patch)
+        run: ./scripts/build-moor.sh
+
+      - name: Stage WhiteSur themes (pinned commits)
+        run: ./scripts/stage-themes.sh
+
+      - name: Build ISO with live-build
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          cd live
+          lb clean --purge || true
+          ./auto-config.sh
+          start=$(date +%s)
+          echo "$start" > "$GITHUB_WORKSPACE/out/build-start.epoch"
+          lb build 2>&1 | tee "$GITHUB_WORKSPACE/out/lb-build.log"
+          end=$(date +%s)
+          echo "$end" > "$GITHUB_WORKSPACE/out/build-end.epoch"
+          echo "BUILD_SECONDS=$((end - start))" >> "$GITHUB_ENV"
+
+      - name: Checksum and build info
+        shell: bash
+        run: |
+          set -euo pipefail
+          iso=$(ls live/*.iso | head -n1)
+          name=$(basename "$iso")
+          mv "$iso" "out/$name"
+          cd out
+          sha256sum "$name" > "$name.sha256"
+          {
+            echo "iso: $name"
+            echo "size_bytes: $(stat -c %s "$name")"
+            echo "size_human: $(du -h "$name" | cut -f1)"
+            echo "sha256: $(cut -d' ' -f1 "$name.sha256")"
+            echo "build_seconds: ${BUILD_SECONDS}"
+            echo "commit: ${GITHUB_SHA}"
+            echo "ref: ${GITHUB_REF}"
+            echo "run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "built_utc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > build-info.txt
+          cat build-info.txt
+          df -h / || true
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: moor-linux-iso
+          path: |
+            out/*.iso
+            out/*.sha256
+            out/build-info.txt
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: |
+            out/lb-build.log
+            out/build-info.txt
+            live/build.log
+          retention-days: 14
+          if-no-files-found: ignore

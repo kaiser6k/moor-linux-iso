@@ -1,0 +1,3 @@
+#!/bin/sh
+# Open the Moor web desktop (served locally by nginx) as a Chromium app window.
+exec /usr/bin/chromium --app=http://127.0.0.1:8080/ --password-store=basic --no-first-run --no-default-browser-check "$@"

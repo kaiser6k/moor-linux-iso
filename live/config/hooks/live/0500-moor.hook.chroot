@@ -1,0 +1,53 @@
+#!/bin/sh
+set -e
+echo "I: Moor Linux customisation hook"
+
+# --- Branding: os-release / issue ---
+cp /usr/lib/moor/os-release /usr/lib/os-release
+ln -sf ../usr/lib/os-release /etc/os-release
+printf 'Moor Linux \\n \\l\n\n' > /etc/issue
+echo 'Moor Linux' > /etc/issue.net
+
+# --- Lean GNOME: drop GNOME Software + PackageKit ---
+# Mark everything manual first so removing the gnome-core metapackage (which
+# depends on gnome-software/gstreamer1.0-packagekit) never autoremoves GNOME.
+apt-mark manual $(dpkg-query -W -f '${Package}\n') >/dev/null
+DEBIAN_FRONTEND=noninteractive apt-get purge -y gnome-software gnome-software-common \
+  gnome-software-plugin-deb gnome-software-plugin-flatpak gnome-software-plugin-fwupd \
+  packagekit packagekit-tools gstreamer1.0-packagekit 2>/dev/null || true
+rm -f /etc/xdg/autostart/org.gnome.Software.desktop /etc/xdg/autostart/gnome-software-service.desktop
+systemctl mask packagekit.service packagekit-offline-update.service 2>/dev/null || true
+
+# --- Tracker / LocalSearch indexer off ---
+for u in tracker-miner-fs-3.service tracker-miner-fs-control-3.service tracker-extract-3.service \
+         tracker-miner-rss-3.service tracker-writeback-3.service \
+         localsearch-3.service localsearch-control-3.service localsearch-extractor-3.service localsearch-writeback-3.service; do
+  systemctl --global mask "$u" 2>/dev/null || true
+done
+rm -f /etc/xdg/autostart/tracker-miner-fs-3.desktop /etc/xdg/autostart/localsearch-3.desktop
+
+# --- Evolution: remove the alarm-notify autostart only. evolution-data-server
+# itself stays (gnome-shell's calendar/clock menu uses it via D-Bus activation).
+rm -f /etc/xdg/autostart/org.gnome.Evolution-alarm-notify.desktop
+
+# --- Moor web server (nginx, loopback only) ---
+rm -f /etc/nginx/sites-enabled/default
+ln -sf /etc/nginx/sites-available/moor /etc/nginx/sites-enabled/moor
+systemctl enable nginx.service
+
+# --- zram swap, graphical boot ---
+systemctl enable zramswap.service || true
+systemctl set-default graphical.target
+systemctl enable gdm3.service 2>/dev/null || systemctl enable gdm.service || true
+
+# --- Themes: caches + dconf defaults ---
+for t in WhiteSur WhiteSur-dark WhiteSur-light hicolor; do
+  [ -d /usr/share/icons/$t ] && gtk-update-icon-cache -f -q /usr/share/icons/$t || true
+done
+glib-compile-schemas /usr/share/glib-2.0/schemas
+dconf update
+
+# Default cursor for non-GNOME consumers too
+update-alternatives --install /usr/share/icons/default/index.theme x-cursor-theme /usr/share/icons/WhiteSur-cursors/index.theme 90 || true
+
+echo "I: installed extensions:"; ls /usr/share/gnome-shell/extensions/ || true

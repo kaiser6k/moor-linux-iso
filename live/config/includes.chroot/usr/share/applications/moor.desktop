@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Moor
+Comment=Moor web desktop
+Exec=/usr/local/bin/moor-launch
+Icon=moor
+Terminal=false
+Categories=Utility;
+StartupNotify=true
+StartupWMClass=chrome-127.0.0.1__-Default

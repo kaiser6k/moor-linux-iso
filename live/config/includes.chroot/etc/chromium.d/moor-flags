@@ -1,0 +1,2 @@
+# Moor Linux: no GNOME keyring prompt in the autologin live session
+export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --password-store=basic"

@@ -1,0 +1,53 @@
+diff --git a/src/components/apps/linux-app.tsx b/src/components/apps/linux-app.tsx
+index 5fa12aa..0fc3653 100644
+--- a/src/components/apps/linux-app.tsx
++++ b/src/components/apps/linux-app.tsx
+@@ -1,4 +1,21 @@
++// Moor Linux ISO builds (VITE_MOOR_ISO=true) ship without CheerpX: its
++// Community License forbids self-hosting/redistribution, and on bare metal the
++// emulated VM is redundant. A real terminal arrives in a later phase.
++const ISO_BUILD = import.meta.env.VITE_MOOR_ISO === "true";
++
+ export function LinuxApp() {
++  if (ISO_BUILD) {
++    return (
++      <div className="flex h-full flex-col bg-bg p-5">
++        <p className="text-xs font-medium tracking-widest text-primary uppercase">Linux VM</p>
++        <h1 className="mt-2 text-xl font-semibold">Not available in this build</h1>
++        <p className="mt-3 max-w-md text-sm leading-relaxed text-muted">
++          Moor Linux already runs on a real Linux system, so the in-browser x86 VM is not included here. Open the
++          Terminal app from the dock for a real shell.
++        </p>
++      </div>
++    );
++  }
+   return (
+     <div className="flex h-full flex-col bg-bg p-5">
+       <p className="text-xs font-medium tracking-widest text-primary uppercase">Debian</p>
+diff --git a/vite.config.ts b/vite.config.ts
+index a831d2c..1e56faa 100644
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -165,6 +165,11 @@ function authPopupPlugin(): Plugin {
+ // `0.0.0.0:8080` is the live-preview contract — don't change host/port.
+ // The dev server starts once `src/router.tsx` and `src/routes/` exist — see
+ // AGENTS.md § "First scaffold".
++// MOOR_ISO_STATIC=1 (Moor Linux ISO build): TanStack Start SPA mode with a
++// prerendered shell and NO Nitro server, so the output in dist/client is a
++// plain static site that nginx on the ISO can serve without Node.
++const ISO_STATIC = process.env.MOOR_ISO_STATIC === "1";
++
+ export default defineConfig(({ command, isPreview }) => ({
+   server: {
+     host: "0.0.0.0",
+@@ -187,8 +192,8 @@ export default defineConfig(({ command, isPreview }) => ({
+     // PWA head + ?install=1 tutorial page; runs before Start/Nitro.
+     grokPwaPlugin(),
+     tailwindcss(),
+-    tanstackStart(),
+-    ...(command === "build" || isPreview
++    ISO_STATIC ? tanstackStart({ spa: { enabled: true } }) : tanstackStart(),
++    ...(!ISO_STATIC && (command === "build" || isPreview)
+       ? [
+           nitro({
+             preset: "vercel",

@@ -1,0 +1,43 @@
+# --- Desktop: lean GNOME on Wayland (gnome-core, no recommends) ---
+gnome-core
+gnome-console
+gdm3
+xwayland
+xdg-desktop-portal-gnome
+gnome-shell-extension-dashtodock
+gnome-shell-extension-user-theme
+dconf-cli
+dbus-user-session
+libpam-systemd
+network-manager
+fonts-cantarell
+fonts-dejavu-core
+locales
+sudo
+user-setup
+zram-tools
+# --- Moor web app (static, served on 127.0.0.1) + launcher browser ---
+nginx
+chromium
+# --- Graphics: full Mesa ---
+libgl1-mesa-dri
+libglx-mesa0
+libegl-mesa0
+libgbm1
+mesa-vulkan-drivers
+mesa-va-drivers
+# --- Firmware (main + non-free-firmware) ---
+firmware-linux-free
+firmware-misc-nonfree
+firmware-amd-graphics
+firmware-intel-graphics
+firmware-intel-sound
+firmware-sof-signed
+firmware-iwlwifi
+firmware-realtek
+firmware-atheros
+firmware-brcm80211
+firmware-mediatek
+intel-microcode
+amd64-microcode
+zstd

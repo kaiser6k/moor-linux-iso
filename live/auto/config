@@ -1,0 +1,4 @@
+#!/bin/sh
+# Called by `lb config`; delegates to ../auto-config.sh so there is one source of truth.
+set -e
+exec "$(dirname "$0")/../auto-config.sh" "$@"
