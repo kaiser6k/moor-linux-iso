@@ -539,6 +539,34 @@ extract_xfce_boot() {
   printf '%s\n%s\n%s\n' "$kernel" "$initrd" "$cmdline"
 }
 
+pin_spice_graphics() {
+  local xml=$1
+  [[ $DISPLAY == spice ]] || return 0
+  python3 - "$xml" "$PORT" <<'PY'
+import re
+import sys
+
+path, port = sys.argv[1], sys.argv[2]
+if not port.isdigit():
+    sys.exit("spice port is not numeric")
+text = open(path, encoding="utf-8").read()
+pattern = re.compile(r"<graphics\b[^>]*\btype=(['\"])spice\1[^>]*/?>", re.I)
+matches = list(pattern.finditer(text))
+if len(matches) != 1:
+    sys.exit("expected one spice graphics element, found %d" % len(matches))
+tag = matches[0].group(0)
+if tag.endswith("/>"):
+    sys.exit("spice graphics element has no listen child")
+new = (
+    "<graphics type='spice' port='%s' tlsPort='-1' autoport='no' "
+    "listen='127.0.0.1' defaultMode='insecure'>"
+    % port
+)
+text = text[: matches[0].start()] + new + text[matches[0].end() :]
+open(path, "w", encoding="utf-8").write(text)
+PY
+}
+
 listen_is_local() {
   local xml=$1
   local graphics
@@ -603,18 +631,24 @@ start_domain() {
     --disk "path=${iso},device=cdrom,bus=sata,readonly=on"
     --boot "kernel=${kernel},initrd=${initrd},kernel_args=${cmdline}"
     --network "user,model=virtio"
-    --graphics "${DISPLAY},listen=127.0.0.1,port=${PORT}"
     --video virtio
     --input "tablet,bus=usb"
     --noautoconsole
   )
   if [[ $DISPLAY == spice ]]; then
+    # tlsport=-1 and defaultMode=insecure keep libvirt from allocating a
+    # TLS port. Ubuntu's qemu.conf leaves spice TLS disabled, and an
+    # autoport request fails the domain start.
+    args+=(--graphics "spice,listen=127.0.0.1,port=${PORT},tlsport=-1,defaultMode=insecure")
     args+=(--channel "spicevmc,target_type=virtio,name=com.redhat.spice.0")
+  else
+    args+=(--graphics "vnc,listen=127.0.0.1,port=${PORT}")
   fi
   if [[ -n $SERIAL_LOG ]]; then
     args+=(--serial "file,path=${SERIAL_LOG}")
   fi
   virt-install "${args[@]}" --print-xml >"$xml"
+  pin_spice_graphics "$xml"
   if ! listen_is_local "$xml"; then
     die "Refusing to define a domain whose console is not limited to 127.0.0.1. See ${xml}."
   fi
