@@ -8,8 +8,15 @@
 #   sudo ./scripts/vps-setup-nested-vm.sh --sha256 SHA256 /path/or/https://url.iso
 #   sudo ./scripts/vps-setup-nested-vm.sh --destroy
 #
+# --sha256 is required when the ISO is an http(s) URL. A local path may omit it.
+# Only /etc/os-release ID=ubuntu or ID=debian is accepted. Derivatives are refused.
+#
 # See docs/VPS-NESTED-VM.md for the morning steps and the idle-RAM numbers.
 set -euo pipefail
+
+# Paths created before the state file exists. Removed on failure so a
+# half-finished URL download does not stay behind.
+UNRECORDED=()
 
 STATE_DIR=/var/lib/moor-nested-vm
 STATE_FILE=$STATE_DIR/state
@@ -46,6 +53,7 @@ Options:
   --disk GB          Persistence disk size in GB (env MOOR_DISK_GB). Default 16.
   --vcpus N          Guest vCPUs (env MOOR_VCPUS). Default 2, or 1 if the host has one CPU.
   --sha256 HEX       Require this SHA256 (env MOOR_SHA256).
+                     Required when the ISO is an http(s) URL.
   --display spice|vnc
                      Console type. Default spice. Always bound to 127.0.0.1.
   --port N           Console port. Default 5900.
@@ -65,30 +73,44 @@ warn_loud() {
   echo "WARNING: $*" >&2
 }
 
+note_unrecorded() {
+  UNRECORDED+=("$1")
+}
+
+cleanup_unrecorded() {
+  local status=$?
+  local path
+  # A written state file means --destroy owns these paths.
+  if [[ -f $STATE_FILE ]]; then
+    exit "$status"
+  fi
+  for path in "${UNRECORDED[@]}"; do
+    case "$path" in
+      "$IMAGE_DIR"/*)
+        rm -f -- "$path" || true
+        ;;
+    esac
+  done
+  exit "$status"
+}
+trap cleanup_unrecorded EXIT
+
 require_debian() {
   if [[ ! -r /etc/os-release ]]; then
     die "This script supports Ubuntu and Debian only. /etc/os-release is missing."
   fi
   # Read ID in a subshell. Sourcing os-release here would set NAME=Ubuntu
   # and overwrite the libvirt domain name.
-  local id like
+  local id
   id=$(
     # shellcheck disable=SC1091
     . /etc/os-release
     printf '%s' "${ID:-}"
   )
-  like=$(
-    # shellcheck disable=SC1091
-    . /etc/os-release
-    printf '%s' "${ID_LIKE:-}"
-  )
   case "$id" in
     ubuntu|debian) return 0 ;;
   esac
-  case " $like " in
-    *" debian "*|*" ubuntu "*) return 0 ;;
-  esac
-  die "This script supports Ubuntu and Debian only (found ID=${id:-unknown})."
+  die "This script supports Ubuntu and Debian only (found ID=${id:-unknown}). Derivatives are refused, including when ID_LIKE contains debian or ubuntu."
 }
 
 require_root() {
@@ -124,7 +146,7 @@ choose_guest_mib() {
   if [[ -n $RAM_MB ]]; then
     require_number "RAM" "$RAM_MB"
     if [[ $RAM_MB -lt $MIN_GUEST_MIB ]]; then
-      warn_loud "Guest RAM ${RAM_MB} MiB is below ${MIN_GUEST_MIB} MiB. The measured Xfce-lite idle set used 581 MiB."
+      warn_loud "Guest RAM ${RAM_MB} MiB is below ${MIN_GUEST_MIB} MiB. The 4096 MiB Xfce sample used 581 MiB at idle. A guest this small was not booted."
     fi
     echo "$RAM_MB"
     return
@@ -436,6 +458,16 @@ do_destroy() {
   echo "Removed the nested VM and files this script created (${name})."
 }
 
+require_url_sha() {
+  case "$ISO" in
+    http://*|https://*)
+      if [[ -z $SHA ]]; then
+        die "SHA256 is required when the ISO is a URL. Pass --sha256."
+      fi
+      ;;
+  esac
+}
+
 verify_sha() {
   local file=$1
   local got
@@ -478,8 +510,11 @@ prepare_iso() {
   install -d -m 0755 "$IMAGE_DIR"
   if [[ $src == http://* || $src == https://* ]]; then
     dest=$IMAGE_DIR/moor-linux.iso
+    note_unrecorded "${dest}.partial"
+    note_unrecorded "$dest"
     curl -fL --retry 5 --retry-delay 2 -o "${dest}.partial" "$src"
     mv "${dest}.partial" "$dest"
+    rm -f -- "${dest}.partial"
     owned=1
   else
     if [[ ! -f $src ]]; then
@@ -487,6 +522,7 @@ prepare_iso() {
     fi
     dest=$IMAGE_DIR/$(basename "$src")
     if [[ $(realpath "$src") != $(realpath -m "$dest") ]]; then
+      note_unrecorded "$dest"
       cp -f "$src" "$dest"
       owned=1
     else
@@ -531,6 +567,8 @@ extract_xfce_boot() {
   esac
   kernel=$IMAGE_DIR/vmlinuz
   initrd=$IMAGE_DIR/initrd.img
+  note_unrecorded "$kernel"
+  note_unrecorded "$initrd"
   xorriso -osirrox on -indev "$iso" \
     -extract "$linux_path" "$kernel" \
     -extract "$initrd_path" "$initrd" >/dev/null
@@ -566,6 +604,38 @@ new = (
     % port
 )
 text = text[: matches[0].start()] + new + text[matches[0].end() :]
+open(path, "w", encoding="utf-8").write(text)
+PY
+}
+
+pin_serial_log() {
+  local xml=$1
+  [[ -n $SERIAL_LOG ]] || return 0
+  python3 - "$xml" "$SERIAL_LOG" <<'PY'
+import re
+import sys
+
+path, log_path = sys.argv[1], sys.argv[2]
+if "'" in log_path:
+    sys.exit("serial log path cannot contain a single quote")
+text = open(path, encoding="utf-8").read()
+match = re.search(r"<serial\b[^>]*>", text)
+if not match:
+    sys.exit("domain XML has no serial element")
+tag = match.group(0)
+if tag.endswith("/>"):
+    sys.exit("serial element has no body")
+if re.search(r"\btype=(['\"])pty\1", tag) is None:
+    tag = re.sub(r"\btype=(['\"])[^'\"]+\1", "type='pty'", tag, count=1)
+    text = text[: match.start()] + tag + text[match.end() :]
+    match = re.search(r"<serial\b[^>]*>", text)
+end = text.find("</serial>", match.end())
+if end < 0:
+    sys.exit("serial element is not closed")
+body = text[match.end() : end]
+if "<log " not in body:
+    insert = "\n      <log file='%s' append='off'/>" % log_path
+    text = text[: match.end()] + insert + text[match.end() :]
 open(path, "w", encoding="utf-8").write(text)
 PY
 }
@@ -648,10 +718,12 @@ start_domain() {
     args+=(--graphics "vnc,listen=127.0.0.1,port=${PORT}")
   fi
   if [[ -n $SERIAL_LOG ]]; then
-    args+=(--serial "file,path=${SERIAL_LOG}")
+    # A pty plus a log file, so a test can read the guest and type at the getty.
+    args+=(--serial pty)
   fi
   virt-install "${args[@]}" --print-xml >"$xml"
   pin_spice_graphics "$xml"
+  pin_serial_log "$xml"
   if ! listen_is_local "$xml"; then
     die "Refusing to define a domain whose console is not limited to 127.0.0.1. See ${xml}."
   fi
@@ -724,6 +796,7 @@ create_vm() {
     die "Could not read the Moor Linux Lite (Xfce) boot entry from the ISO."
   fi
   local disk=$IMAGE_DIR/${NAME}.qcow2
+  note_unrecorded "$disk"
   if [[ ! -f $disk ]]; then
     qemu-img create -f qcow2 "$disk" "${DISK_GB}G"
   fi
@@ -750,6 +823,7 @@ main() {
   if [[ -z $ISO ]]; then
     die "Pass the ISO path or URL. Use --help for options."
   fi
+  require_url_sha
   require_number "disk" "$DISK_GB"
   if [[ $DRY -eq 1 ]]; then
     if [[ $ISO != http://* && $ISO != https://* ]]; then

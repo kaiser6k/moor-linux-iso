@@ -14,34 +14,86 @@ nothing else.
 
 ## Morning steps
 
-Run these on the VPS, in this order. The machine is assumed to be Ubuntu or
-Debian. The script exits if it is anything else.
+Run these on the VPS, in this order. The script accepts only Ubuntu or Debian,
+which means `/etc/os-release` `ID=ubuntu` or `ID=debian`. It refuses everything
+else, including derivatives whose `ID_LIKE` mentions debian or ubuntu (Linux
+Mint, Pop!_OS, and the like).
 
-### 1. Check nested KVM
+### 1. Pre-checks: memory, then nested KVM
 
 ```sh
+awk '/^MemTotal:/ { printf "%d MiB\n", int($2 / 1024) }' /proc/meminfo
 grep -E '(vmx|svm)' /proc/cpuinfo | head
 grep -E -c '(vmx|svm)' /proc/cpuinfo
 ls -l /dev/kvm
 ```
 
+Write down the MiB number. The script reads that same `MemTotal`, subtracts
+1536 MiB, rounds down to a multiple of 256 MiB, and caps the result at 4096
+MiB. It refuses an automatic size below 1024 MiB unless you pass `--ram`.
+
+Worked outputs of that formula:
+
+| Host `MemTotal` | Guest the script chooses |
+|---|---|
+| 3891 MiB (a 4 GB VPS) | 2304 MiB |
+| under 3840 MiB, still above the 1024 MiB floor | 2048 MiB |
+| exactly 3840 MiB | 2304 MiB |
+| about 10 GB (10240 MiB) | 4096 MiB, the cap |
+
 A count of zero, or no writable `/dev/kvm`, means the script uses TCG and
 prints a warning that the desktop will be slow.
 
-### 2. Get the ISO
+### 2. Get the ISO and the script
 
-Download the `moor-linux-iso` artifact from
-[Build ISO run 36363113863](https://github.com/kaiser6k/moor-linux-iso/actions/runs/36363113863).
-It contains `moor-linux-amd64.hybrid.iso`, the `.sha256` file, and
-`build-info.txt`. Direct artifact link:
-[moor-linux-iso](https://github.com/kaiser6k/moor-linux-iso/actions/runs/36363113863/artifacts/10946214543).
+The ISO is about 1.4 GB (`moor-linux-amd64.hybrid.iso`, 1403781120 bytes).
+There is one artifact to download, id `10946214543`, from
+[Build ISO run 36363113863](https://github.com/kaiser6k/moor-linux-iso/actions/runs/36363113863):
+
+[moor-linux-iso artifact 10946214543](https://github.com/kaiser6k/moor-linux-iso/actions/runs/36363113863/artifacts/10946214543)
+
+That page needs a GitHub login. The browser downloads a zip. Unzip it. Inside
+are `moor-linux-amd64.hybrid.iso`, `moor-linux-amd64.hybrid.iso.sha256`, and
+`build-info.txt`.
+
+From a machine that already has `gh` logged in, the same artifact unpacks
+without a separate unzip:
+
+```sh
+gh run download 36363113863 --repo kaiser6k/moor-linux-iso --name moor-linux-iso --dir moor-iso
+cd moor-iso
+sha256sum -c moor-linux-amd64.hybrid.iso.sha256
+```
+
+The SHA256 of the ISO is:
 
 ```text
 2b0e0b05fff1e145a737f47b02e19004ba40aa574a73bce79b9a9fa9ed8538e6
 ```
 
-That checksum is the SHA256 of `moor-linux-amd64.hybrid.iso` in that artifact.
-Copy `scripts/vps-setup-nested-vm.sh` onto the VPS as well.
+Copy the ISO to the VPS (replace `USER` and `YOUR_VPS`):
+
+```sh
+scp moor-linux-amd64.hybrid.iso USER@YOUR_VPS:~/
+```
+
+On the VPS, fetch the setup script from branch `cursor/vps-nested-vm-ram-6ee6`:
+
+```sh
+curl -fL -o vps-setup-nested-vm.sh \
+  https://raw.githubusercontent.com/kaiser6k/moor-linux-iso/cursor/vps-nested-vm-ram-6ee6/scripts/vps-setup-nested-vm.sh
+chmod +x vps-setup-nested-vm.sh
+```
+
+On Windows, install Virt Viewer so you have `remote-viewer`. In PowerShell:
+
+```text
+winget install --id RedHat.VirtViewer -e
+```
+
+The MSI builds are also listed at https://releases.pagure.org/virt-viewer/ .
+After it installs, open Remote Viewer from the Start menu, or run
+`remote-viewer` if that directory is on your PATH.
 
 ### 3. Dry run, then create the VM
 
@@ -68,14 +120,21 @@ environment variables `MOOR_RAM_MB`, `MOOR_DISK_GB`, and `MOOR_VCPUS`.
 qcow2. It is attached and not formatted as a persistence volume, so the live
 overlay stays in guest RAM, which is how the idle samples were taken.
 
-Sizing: read `MemTotal`, subtract 1536 MiB for the host OS, `sshd`, and QEMU's
-own overhead, round down to a multiple of 256 MiB, and cap at 4096 MiB. The
-script refuses to go below 1024 MiB unless you pass `--ram`. A host whose
-`MemTotal` is about 10 GB therefore gets one 4096 MB guest. A smaller host,
-including a 4 GB VPS, gets a smaller guest and still keeps that 1536 MiB
-reserve. The script does not turn on host swap and does not install host zram.
-Guest zram is already in the image (`PERCENT=50`). Do not count on the host
-swapping the QEMU process.
+Sizing is the table in the pre-checks. A 4 GB VPS whose `MemTotal` is 3891
+MiB gets a 2304 MiB guest. If `MemTotal` is under 3840 MiB the same formula
+lands on 2048 MiB. A host near 10 GB hits the 4096 MiB cap. The script does
+not turn on host swap and does not install host zram. Guest zram is already
+in the image (`PERCENT=50`). Do not count on the host swapping the QEMU
+process.
+
+Installing `libvirt-daemon-system` enables libvirt's `default` NAT network.
+That network starts `dnsmasq` and adds firewall rules for the `virbr0`
+bridge. Those rules do not publish the guest or the console on the VPS
+public address. The VM this script creates does not use that bridge. Its NIC
+is libvirt `user` networking (SLIRP). SPICE is started with no password.
+That is safe only because the listen address is `127.0.0.1` and you reach it
+through the SSH tunnel. Do not change the listen address and do not open
+port 5900.
 
 ### 4. Open the console from Windows
 
@@ -155,7 +214,7 @@ still applies.
 Virtio devices are in the Debian kernel this ISO already ships (`virtio-net`,
 `virtio-blk`, `virtio-gpu` / `virtio-vga`, `virtio-scsi`). No extra driver ISO.
 
-Store the ISO on the VPS (about 2 GB). Suggested persistence disk, if you want
+Store the ISO on the VPS (about 1.4 GB). Suggested persistence disk, if you want
 one, is 16 GB. The idle-RAM numbers below were taken with no disk and no
 balloon device, 4096 MB, BIOS, virtio-vga, user-mode networking.
 
@@ -192,6 +251,12 @@ qemu-system-x86_64 \
   -boot order=d
 ```
 
+This CD boot stops at the menu. The default entry is GNOME-lean. Choose
+**Moor Linux Lite (Xfce)** before the timeout. On the isolinux menu that entry
+is after Live, serial, and fail-safe: press Down three times, then Enter.
+The setup script does not use this menu. It boots that same Xfce command line
+directly.
+
 VNC instead of SPICE:
 
 ```sh
@@ -219,6 +284,17 @@ virt-install \
   --os-variant debian13 \
   --noautoconsole
 ```
+
+`--network network=default` attaches the guest to libvirt's NAT network. That
+network auto-starts `dnsmasq` and host firewall rules. Nothing in those rules
+listens on the VPS public address; the guest is still behind NAT. The setup
+script uses `--network user` instead, which is SLIRP and does not add the
+guest to `virbr0`.
+
+This CD boot also stops at the menu. Choose **Moor Linux Lite (Xfce)** (Down
+three times, then Enter on the isolinux menu) or the default GNOME-lean
+session starts. SPICE here has no password. Leave the listen address at
+`127.0.0.1` and use the SSH tunnel.
 
 If `osinfo-query os` has no `debian13`, use the newest `debian` variant it lists.
 Confirm the SPICE or VNC listen address is `127.0.0.1` (`virsh dumpxml moor`).
@@ -295,6 +371,9 @@ ufw allow OpenSSH
 ufw enable
 ```
 
+`ufw allow OpenSSH` opens port 22 only. If `sshd` is listening on another
+port, allow that port before `ufw enable` (for example `ufw allow 2222/tcp`).
+Otherwise enabling the firewall drops the SSH session you are using.
 Do not `ufw allow 5900` or `ufw allow 3389`.
 
 ## GNOME-lean: what was turned off
@@ -370,13 +449,27 @@ Xfce-lite is the smallest idle set of the three. GNOME-lean is 43 MiB of
 host is split. The Xfce gap does: 202 MiB less `used` than the baseline, and
 159 MiB less than GNOME-lean.
 
-The samples booted at 4096 MB only. No run booted at 3072 MB, and Chromium was
-not in the sample. 581 MiB is below 1024 MiB, which is the smallest guest the
-setup script will choose on its own, so the measured Xfce idle set fits that
-guest. A guest smaller than the measured `used` value cannot hold that idle
-set. On a host with about 10 GB of RAM the script's cap is one 4096 MB guest.
-On today's 4 GB host the same formula leaves 1536 MiB for the host and gives
-the rest, up to that cap, to this one Xfce guest. Do not start a second VM.
+The samples above booted at 4096 MB only. No run in that table booted at
+3072 MB or at 1024 MB, and Chromium was not in the sample. Those 581 MiB do
+not show that a 1024 MiB guest can hold the desktop. A guest smaller than the
+measured `used` value cannot hold that idle set.
+
+On a 4 GB VPS the script does not ask for 4096 MB. The formula in the morning
+steps gives 2304 MiB when `MemTotal` is 3891, and 2048 MiB when `MemTotal` is
+under 3840. On a host near 10 GB the cap is one 4096 MiB guest. Do not start
+a second VM.
+
+### Script-path idle RAM at 2304 and 2048
+
+These boots use `scripts/vps-setup-nested-vm.sh` (SPICE on `127.0.0.1`,
+virtio disk and video, the Xfce kernel command line). Each size is one
+sample, not a median of three. The probe waits until `xfce4-session` is
+running, idles 120 seconds, then reads `free -m` used.
+
+<!-- VPS-SIZE-IDLE-START -->
+Not measured yet. The script-test job records `idle-used-2304.txt` and
+`idle-used-2048.txt`.
+<!-- VPS-SIZE-IDLE-END -->
 
 ### Swap and zram in the guest
 

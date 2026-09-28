@@ -386,7 +386,7 @@ jobs:
     needs: [plan, build, publish-iso]
     if: always() && needs.publish-iso.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -434,35 +434,82 @@ jobs:
             sudo ./scripts/vps-setup-nested-vm.sh --destroy || true
           }
           trap cleanup EXIT
+          assert_removed() {
+            if sudo virsh dominfo moor >/dev/null 2>&1; then
+              echo "domain moor still defined after --destroy" >&2
+              exit 1
+            fi
+            if sudo ss -H -ltn 'sport = :5900' | grep -q ':5900'; then
+              echo "port 5900 still open after --destroy" >&2
+              exit 1
+            fi
+            iso_copy="/var/lib/libvirt/images/moor-nested/$(basename "$iso")"
+            for path in \
+              /var/lib/libvirt/images/moor-nested/moor.qcow2 \
+              /var/lib/libvirt/images/moor-nested/vmlinuz \
+              /var/lib/libvirt/images/moor-nested/initrd.img \
+              /var/lib/libvirt/images/moor-nested/moor.xml \
+              "$iso_copy" \
+              /var/lib/moor-nested-vm/state
+            do
+              if sudo test -e "$path"; then
+                echo "still present after --destroy: $path" >&2
+                exit 1
+              fi
+            done
+            if sudo test -d /var/lib/libvirt/images/moor-nested; then
+              echo "image directory still exists after --destroy" >&2
+              sudo ls -la /var/lib/libvirt/images/moor-nested >&2 || true
+              exit 1
+            fi
+          }
           run_one() {
             accel=$1
             tries=$2
+            ram=$3
+            tag=$4
+            : > "$serial"
+            ram_args=()
+            if [ -n "$ram" ]; then
+              ram_args=(--ram "$ram")
+            fi
             sudo ./scripts/vps-setup-nested-vm.sh \
               --accel "$accel" \
+              "${ram_args[@]}" \
               --sha256 "$sha" \
               --serial-log "$serial" \
-              "$iso" | tee "run-${accel}.log"
-            grep -q "^MOOR_ACCEL=${accel}$" "run-${accel}.log"
+              "$iso" | tee "run-${tag}.log"
+            grep -q "^MOOR_ACCEL=${accel}$" "run-${tag}.log"
             echo "--- listeners ---"
-            sudo ss -H -ltn 'sport = :5900' | tee "listen-${accel}.txt"
-            if grep -E '0\.0\.0\.0:5900|\*:5900|\[::\]:5900' "listen-${accel}.txt"; then
+            sudo ss -H -ltn 'sport = :5900' | tee "listen-${tag}.txt"
+            if grep -E '0\.0\.0\.0:5900|\*:5900|\[::\]:5900' "listen-${tag}.txt"; then
               echo "console is not localhost-only" >&2
               exit 1
             fi
-            grep -q '127.0.0.1:5900' "listen-${accel}.txt"
-            sudo virsh dumpxml moor > "domain-${accel}.xml"
-            awk '/<graphics /,/<\/graphics>/' "domain-${accel}.xml" > "graphics-${accel}.txt"
-            if grep -E "0\\.0\\.0\\.0|listen='::'|address='::'" "graphics-${accel}.txt"; then
-              echo "domain XML is not localhost-only" >&2
+            grep -q '127.0.0.1:5900' "listen-${tag}.txt"
+            sudo virsh dumpxml moor > "domain-${tag}.xml"
+            awk '/<graphics /,/<\/graphics>/' "domain-${tag}.xml" > "graphics-${tag}.txt"
+            if grep -E "0\\.0\\.0\\.0|listen='::'|address='::'|passwd=" "graphics-${tag}.txt"; then
+              echo "domain XML is not an unauthenticated localhost SPICE console" >&2
               exit 1
             fi
-            grep -q '127.0.0.1' "graphics-${accel}.txt"
-            # libvirt dynamic ownership makes the serial file mode 0600
+            grep -q "type='spice'" "graphics-${tag}.txt"
+            grep -q '127.0.0.1' "graphics-${tag}.txt"
+            grep -q "bus='virtio'" "domain-${tag}.xml"
+            grep -q "<model type='virtio'" "domain-${tag}.xml"
+            if [ "$accel" = tcg ]; then
+              grep -q '<model fallback=.forbid.>qemu64</model>' "domain-${tag}.xml"
+            fi
+            if [ -n "$ram" ]; then
+              kib=$((ram * 1024))
+              grep -q "<memory unit='KiB'>${kib}</memory>" "domain-${tag}.xml"
+            fi
+            # libvirt dynamic ownership makes the serial log mode 0600
             # and owned by libvirt-qemu while the guest is running.
             i=0
             while [ "$i" -lt "$tries" ]; do
-              if sudo grep -q 'login:' "$serial"; then
-                echo "login prompt for ${accel} after $((i * 5))s"
+              if sudo grep -F -q 'moor login:' "$serial"; then
+                echo "login prompt for ${tag} after $((i * 5))s"
                 break
               fi
               if sudo grep -q 'Unable to find a medium' "$serial"; then
@@ -472,31 +519,65 @@ jobs:
               i=$((i + 1))
               sleep 5
             done
-            sudo cp "$serial" "serial-${accel}.log"
-            sudo chown "$(id -u):$(id -g)" "serial-${accel}.log"
-            sudo chmod 0644 "serial-${accel}.log"
-            if ! sudo grep -q 'login:' "$serial"; then
-              echo "timed out waiting for a login prompt on ${accel}" >&2
+            sudo cp "$serial" "serial-${tag}.log" || true
+            if ! sudo grep -F -q 'moor login:' "$serial"; then
+              echo "timed out waiting for moor login: on ${tag}" >&2
               sudo tail -c 12000 "$serial" >&2 || true
-              sudo virsh screenshot moor "shot-${accel}.ppm" || true
-              sudo chown "$(id -u):$(id -g)" "shot-${accel}.ppm" 2>/dev/null || true
+              sudo virsh screenshot moor "shot-${tag}.ppm" || true
+              sudo chown "$(id -u):$(id -g)" "shot-${tag}.ppm" "serial-${tag}.log" 2>/dev/null || true
               exit 1
             fi
-            sudo virsh screenshot moor "shot-${accel}.ppm" || true
-            sudo chown "$(id -u):$(id -g)" "shot-${accel}.ppm" 2>/dev/null || true
+            idle=0
+            if [ -n "$ram" ]; then
+              idle=1
+            fi
+            if ! sudo python3 scripts/moor-guest-probe.py "$serial" "$idle" "probe-${tag}.txt"; then
+              echo "guest probe failed for ${tag}" >&2
+              sudo tail -c 12000 "$serial" >&2 || true
+              sudo cp "$serial" "serial-${tag}.log" || true
+              sudo virsh screenshot moor "shot-${tag}.ppm" || true
+              sudo chown "$(id -u):$(id -g)" "shot-${tag}.ppm" "serial-${tag}.log" "probe-${tag}.txt" 2>/dev/null || true
+              exit 1
+            fi
+            sudo chown "$(id -u):$(id -g)" "probe-${tag}.txt"
+            grep -q 'xfce4-session=yes' "probe-${tag}.txt"
+            if [ -n "$ram" ]; then
+              used=$(awk -F= '/^used_mib=/ { print $2 }' "probe-${tag}.txt")
+              case "$used" in
+                ''|*[!0-9]*) echo "idle used memory was not a number" >&2; exit 1 ;;
+              esac
+              if [ "$used" -lt 1 ]; then
+                echo "idle used memory was ${used}" >&2
+                exit 1
+              fi
+              {
+                echo "ram_mib=${ram}"
+                echo "accel=${accel}"
+                echo "samples=1"
+                echo "used_mib=${used}"
+              } > "idle-used-${ram}.txt"
+              echo "idle used ${used} MiB at ${ram} MiB (${accel}, 1 sample)"
+            fi
+            sudo virsh screenshot moor "shot-${tag}.ppm"
+            sudo chown "$(id -u):$(id -g)" "shot-${tag}.ppm"
+            test -s "shot-${tag}.ppm"
+            sudo cp "$serial" "serial-${tag}.log"
+            sudo chown "$(id -u):$(id -g)" "serial-${tag}.log"
+            sudo chmod 0644 "serial-${tag}.log"
             sudo ./scripts/vps-setup-nested-vm.sh --destroy
-            if sudo virsh dominfo moor >/dev/null 2>&1; then
-              echo "domain moor still defined after --destroy" >&2
-              exit 1
-            fi
-            if sudo ss -H -ltn 'sport = :5900' | grep -q ':5900'; then
-              echo "port 5900 still open after --destroy" >&2
-              exit 1
-            fi
+            assert_removed
           }
-          run_one tcg 240
+          # TCG is the script path that uses qemu64. KVM, when the runner has
+          # it, is the same script with --accel kvm. The 2304 and 2048 boots
+          # are one sample each, not a median of three.
+          run_one tcg 240 "" tcg
           if [ "$have_kvm" -eq 1 ]; then
-            run_one kvm 120
+            run_one kvm 120 "" kvm
+            run_one kvm 120 2304 ram2304
+            run_one kvm 120 2048 ram2048
+          else
+            run_one tcg 240 2304 ram2304
+            run_one tcg 240 2048 ram2048
           fi
 
       - name: Upload script-test logs
@@ -513,5 +594,7 @@ jobs:
             graphics-*.txt
             serial-*.log
             shot-*.ppm
+            probe-*.txt
+            idle-used-*.txt
           retention-days: 14
           if-no-files-found: ignore
