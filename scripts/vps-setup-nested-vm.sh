@@ -557,8 +557,11 @@ if len(matches) != 1:
 tag = matches[0].group(0)
 if tag.endswith("/>"):
     sys.exit("spice graphics element has no listen child")
+# Omit tlsPort. libvirt treats tlsPort='-1' as "allocate a TLS port",
+# which fails when qemu.conf has spice TLS disabled. With the attribute
+# absent and autoport='no', TLS stays off.
 new = (
-    "<graphics type='spice' port='%s' tlsPort='-1' autoport='no' "
+    "<graphics type='spice' port='%s' autoport='no' "
     "listen='127.0.0.1' defaultMode='insecure'>"
     % port
 )
@@ -636,10 +639,10 @@ start_domain() {
     --noautoconsole
   )
   if [[ $DISPLAY == spice ]]; then
-    # tlsport=-1 and defaultMode=insecure keep libvirt from allocating a
-    # TLS port. Ubuntu's qemu.conf leaves spice TLS disabled, and an
-    # autoport request fails the domain start.
-    args+=(--graphics "spice,listen=127.0.0.1,port=${PORT},tlsport=-1,defaultMode=insecure")
+    # defaultMode=insecure avoids a TLS channel. pin_spice_graphics then
+    # drops tlsPort, because libvirt reads tlsPort='-1' as an autoport
+    # request and Ubuntu's qemu.conf has spice TLS disabled.
+    args+=(--graphics "spice,listen=127.0.0.1,port=${PORT},defaultMode=insecure")
     args+=(--channel "spicevmc,target_type=virtio,name=com.redhat.spice.0")
   else
     args+=(--graphics "vnc,listen=127.0.0.1,port=${PORT}")
