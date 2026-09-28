@@ -1,0 +1,13 @@
+[PlankDockPreferences]
+alignment=center
+auto-pinning=false
+hide-mode=none
+icon-size=48
+items-alignment=center
+lock-items=true
+position=bottom
+pinned-only=false
+theme=WhiteSur-Dark
+tooltips-enabled=true
+zoom-enabled=false
+zoom-percent=100

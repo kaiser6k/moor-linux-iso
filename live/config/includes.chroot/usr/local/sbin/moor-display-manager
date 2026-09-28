@@ -1,0 +1,13 @@
+#!/bin/sh
+# graphical.target starts this unit and no other display manager.
+# moor.session=xfce (boot menu "Moor Linux Lite (Xfce)") selects LightDM.
+set -eu
+if grep -q 'moor.session=xfce' /proc/cmdline; then
+  echo "moor-display-manager: lightdm (xfce)" >&2
+  exec /usr/sbin/lightdm
+fi
+echo "moor-display-manager: gdm" >&2
+if [ -x /usr/sbin/gdm3 ]; then
+  exec /usr/sbin/gdm3
+fi
+exec /usr/sbin/gdm

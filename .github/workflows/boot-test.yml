@@ -24,7 +24,7 @@ jobs:
   boot:
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -37,11 +37,43 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -eu
+          set -euo pipefail
           if [ "${{ github.event_name }}" = "workflow_run" ]; then
             id="${{ github.event.workflow_run.id }}"
           elif [ -n "${{ inputs.run_id }}" ]; then
             id="${{ inputs.run_id }}"
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
+            sha="${{ github.event.pull_request.head.sha }}"
+            branch="${{ github.head_ref }}"
+            id=
+            for try in $(seq 1 90); do
+              meta=$(gh run list -R "$GITHUB_REPOSITORY" --workflow build-iso.yml \
+                --branch "$branch" --commit "$sha" --limit 1 \
+                --json databaseId,status,conclusion)
+              id=$(printf '%s' "$meta" | jq -r '.[0].databaseId // empty')
+              status=$(printf '%s' "$meta" | jq -r '.[0].status // empty')
+              conclusion=$(printf '%s' "$meta" | jq -r '.[0].conclusion // empty')
+              echo "try ${try}: status=${status:-none} conclusion=${conclusion:-none} id=${id:-none}"
+              art=
+              if [ -n "$id" ]; then
+                art=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/artifacts" \
+                  --jq '[.artifacts[] | select(.name=="moor-linux-iso") | .id][0] // empty')
+                if [ -n "$art" ]; then
+                  echo "ISO artifact ${art} on run ${id}"
+                  break
+                fi
+                if [ "$status" = "completed" ]; then
+                  echo "Build ISO run ${id} finished ${conclusion} without moor-linux-iso" >&2
+                  exit 1
+                fi
+              fi
+              id=
+              sleep 20
+            done
+            if [ -z "$id" ]; then
+              echo "Timed out waiting for moor-linux-iso on ${branch} ${sha}" >&2
+              exit 1
+            fi
           else
             id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow build-iso.yml --branch main \
                    --status success --limit 1 --json databaseId -q '.[0].databaseId')

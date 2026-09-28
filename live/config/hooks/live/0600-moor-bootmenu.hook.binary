@@ -39,4 +39,45 @@ if [ -f isolinux/live.cfg ] && ! grep -q 'serial console' isolinux/live.cfg; the
          line=$0; gsub(/boot=live/, "boot=live console=ttyS0,115200 console=tty0", line); blk=blk line "\n" }' isolinux/live.cfg > isolinux/live.cfg.new
   mv isolinux/live.cfg.new isolinux/live.cfg
 fi
+# Xfce lite is a boot menu entry, not a second ISO. It is appended AFTER the
+# fail-safe entry so the existing boot test (Down, Down, Enter) still lands
+# on fail-safe. Kernel arg moor.session=xfce is read by moor-display-manager.
+if [ -f boot/grub/grub.cfg ] && ! grep -q 'Moor Linux Lite' boot/grub/grub.cfg; then
+  linux=$(awk '
+    $0 ~ /^menuentry "Moor Linux Live" / {p=1}
+    p && $1 == "linux" { sub(/^[[:space:]]*linux[[:space:]]+/, ""); print; exit }
+  ' boot/grub/grub.cfg)
+  initrd=$(awk '
+    $0 ~ /^menuentry "Moor Linux Live" / {p=1}
+    p && $1 == "initrd" { sub(/^[[:space:]]*initrd[[:space:]]+/, ""); print; exit }
+  ' boot/grub/grub.cfg)
+  if [ -z "$linux" ] || [ -z "$initrd" ]; then
+    echo "E: could not clone the default GRUB entry for Xfce" >&2
+    exit 1
+  fi
+  awk -v linux="$linux" -v initrd="$initrd" '
+    { print }
+    $0 ~ /^menuentry "Moor Linux Live \(fail-safe mode\)"/ { ins=1 }
+    ins && $0 ~ /^}/ {
+      ins=0
+      print ""
+      print "menuentry \"Moor Linux Lite (Xfce)\" {"
+      print "\tlinux\t" linux " moor.session=xfce"
+      print "\tinitrd\t" initrd
+      print "}"
+    }
+  ' boot/grub/grub.cfg > boot/grub/grub.cfg.new
+  mv boot/grub/grub.cfg.new boot/grub/grub.cfg
+fi
+if [ -f isolinux/live.cfg ] && ! grep -q 'Moor Linux Lite' isolinux/live.cfg; then
+  cat >> isolinux/live.cfg <<'EOF'
+
+label live-xfce
+	menu label Moor Linux Lite (Xfce)
+	linux /live/vmlinuz
+	initrd /live/initrd.img
+	append boot=live components quiet username=moor hostname=moor locales=en_US.UTF-8 keyboard-layouts=us moor.session=xfce
+EOF
+fi
+
 echo "--- final grub.cfg ---"; cat boot/grub/grub.cfg; echo "--- final live.cfg ---"; cat isolinux/live.cfg

@@ -18,17 +18,112 @@ DEBIAN_FRONTEND=noninteractive apt-get purge -y gnome-software gnome-software-co
 rm -f /etc/xdg/autostart/org.gnome.Software.desktop /etc/xdg/autostart/gnome-software-service.desktop
 systemctl mask packagekit.service packagekit-offline-update.service 2>/dev/null || true
 
+# Mask a unit by the same symlink systemctl mask would create. systemctl in a
+# live-build chroot is not required for this.
+mask_system() {
+  mkdir -p /etc/systemd/system
+  for u in "$@"; do
+    ln -sfn /dev/null "/etc/systemd/system/$u"
+  done
+}
+mask_user() {
+  mkdir -p /etc/systemd/user
+  for u in "$@"; do
+    ln -sfn /dev/null "/etc/systemd/user/$u"
+  done
+}
+
 # --- Tracker / LocalSearch indexer off ---
-for u in tracker-miner-fs-3.service tracker-miner-fs-control-3.service tracker-extract-3.service \
-         tracker-miner-rss-3.service tracker-writeback-3.service \
-         localsearch-3.service localsearch-control-3.service localsearch-extractor-3.service localsearch-writeback-3.service; do
-  systemctl --global mask "$u" 2>/dev/null || true
-done
+mask_user \
+  tracker-miner-fs-3.service tracker-miner-fs-control-3.service tracker-extract-3.service \
+  tracker-miner-rss-3.service tracker-writeback-3.service \
+  localsearch-3.service localsearch-control-3.service localsearch-extractor-3.service \
+  localsearch-writeback-3.service
 rm -f /etc/xdg/autostart/tracker-miner-fs-3.desktop /etc/xdg/autostart/localsearch-3.desktop
 
-# --- Evolution: remove the alarm-notify autostart only. evolution-data-server
-# itself stays (gnome-shell's calendar/clock menu uses it via D-Bus activation).
+# --- evolution-data-server and GNOME Online Accounts ---
+# The libraries stay installed (gnome-shell depends on them). The factories are
+# D-Bus activated and are the resident cost. Masking them leaves the calendar
+# menu empty; the session still logs in. See docs/VPS-NESTED-VM.md.
+mask_user \
+  evolution-source-registry.service evolution-calendar-factory.service \
+  evolution-addressbook-factory.service evolution-alarm-notify.service \
+  goa-daemon.service goa-identity-service.service
 rm -f /etc/xdg/autostart/org.gnome.Evolution-alarm-notify.desktop
+
+# Optional GNOME settings daemons a VM does not have hardware for.
+# XSettings, keyboard, media-keys, power, and sound stay: the theme and session need them.
+mask_user \
+  org.gnome.SettingsDaemon.PrintNotifications.service \
+  org.gnome.SettingsDaemon.Color.service \
+  org.gnome.SettingsDaemon.Housekeeping.service \
+  org.gnome.SettingsDaemon.Rfkill.service \
+  org.gnome.SettingsDaemon.Sharing.service \
+  org.gnome.SettingsDaemon.Smartcard.service \
+  org.gnome.SettingsDaemon.UsbProtection.service \
+  org.gnome.SettingsDaemon.Wacom.service \
+  org.gnome.SettingsDaemon.Wwan.service
+
+# --- System services with nothing to do in a VM (or a live desktop) ---
+# NetworkManager, wpa_supplicant, accounts-daemon, udisks2, upower, rtkit,
+# polkit, nginx, zram, spice-vdagentd, and qemu-guest-agent are not in this list.
+mask_system \
+  cups.service cups.socket cups.path cups-browsed.service \
+  bluetooth.service bluetooth.target \
+  geoclue.service \
+  ModemManager.service \
+  fwupd.service fwupd-refresh.service fwupd-refresh.timer \
+  power-profiles-daemon.service \
+  switcheroo-control.service \
+  bolt.service \
+  avahi-daemon.service avahi-daemon.socket \
+  iio-sensor-proxy.service \
+  pcscd.service pcscd.socket \
+  thermald.service \
+  colord.service \
+  apt-daily.timer apt-daily-upgrade.timer apt-daily.service apt-daily-upgrade.service \
+  packagekit.service packagekit-offline-update.service
+
+# Hide autostart entries for the same set. Hidden=true wins over the packaged file.
+hide_autostart() {
+  for name in "$@"; do
+    for dir in /etc/xdg/autostart /usr/share/gnome/autostart; do
+      if [ -f "$dir/$name" ]; then
+        printf '%s\n' '[Desktop Entry]' 'Hidden=true' > "$dir/$name"
+      fi
+    done
+  done
+}
+hide_autostart \
+  org.gnome.Evolution-alarm-notify.desktop \
+  org.gnome.Software.desktop gnome-software-service.desktop \
+  tracker-miner-fs-3.desktop localsearch-3.desktop \
+  blueman.desktop geoclue-demo.desktop print-applet.desktop \
+  org.gnome.DejaDup.Monitor.desktop update-notifier.desktop
+
+# Plank is the Xfce dock. It must not also start under GNOME (Dash to Dock is the GNOME dock).
+if [ -f /etc/xdg/autostart/plank.desktop ]; then
+  if grep -q '^OnlyShowIn=' /etc/xdg/autostart/plank.desktop; then
+    sed -i 's/^OnlyShowIn=.*/OnlyShowIn=XFCE;/' /etc/xdg/autostart/plank.desktop
+  else
+    printf '\nOnlyShowIn=XFCE;\n' >> /etc/xdg/autostart/plank.desktop
+  fi
+fi
+
+# Default display manager is GNOME. The Xfce menu entry sets moor.session=xfce
+# and /usr/local/sbin/moor-display-manager execs lightdm instead. Masking the
+# packaged units stops both from starting beside that wrapper.
+mask_system gdm.service gdm3.service lightdm.service
+rm -f /etc/systemd/system/display-manager.service \
+  /etc/systemd/system/graphical.target.wants/gdm.service \
+  /etc/systemd/system/graphical.target.wants/gdm3.service \
+  /etc/systemd/system/graphical.target.wants/lightdm.service
+mkdir -p /etc/systemd/system/graphical.target.wants
+ln -sfn /etc/systemd/system/moor-display-manager.service /etc/systemd/system/display-manager.service
+ln -sfn ../moor-display-manager.service /etc/systemd/system/graphical.target.wants/moor-display-manager.service
+chmod 755 /usr/local/sbin/moor-display-manager /usr/local/bin/moor-xfce-look
+mkdir -p /etc/xdg/xfce4/xfconf/xfce-perchannel-xml
+cp -a /etc/skel/.config/xfce4/xfconf/xfce-perchannel-xml/. /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/
 
 # --- Moor web server (nginx, loopback only) ---
 rm -f /etc/nginx/sites-enabled/default

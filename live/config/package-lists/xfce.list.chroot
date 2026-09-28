@@ -1,0 +1,14 @@
+# Selectable "Moor Linux Lite (Xfce)" boot entry. Not started on the default
+# GNOME boot. apt-recommends is off, so the metapackage stays at its Depends.
+xfce4
+xfce4-terminal
+xfce4-whiskermenu-plugin
+xfce4-notifyd
+network-manager-gnome
+lightdm
+lightdm-gtk-greeter
+plank
+# modesetting (virtio-vga) is built into xserver-xorg-core. Skip the
+# xserver-xorg metapackage so xserver-xorg-video-all is not pulled in.
+xserver-xorg-core
+xserver-xorg-input-libinput

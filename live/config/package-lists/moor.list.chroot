@@ -10,6 +10,7 @@ dconf-cli
 dbus-user-session
 libpam-systemd
 network-manager
+wpasupplicant
 fonts-cantarell
 fonts-dejavu-core
 locales
@@ -41,3 +42,8 @@ firmware-mediatek
 intel-microcode
 amd64-microcode
 zstd
+# Guest agents for a nested VM. spice-vdagent is a few MB resident; qemu-guest-agent
+# waits on the virtio serial channel. smem is only resident while the idle-RAM probe runs.
+spice-vdagent
+qemu-guest-agent
+smem

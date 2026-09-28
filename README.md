@@ -21,7 +21,12 @@ app mode.
   (`chromium --app=http://127.0.0.1:8080/`).
 - WhiteSur GTK, icons, cursors, and GNOME Shell theme, plus Dash to Dock at the
   bottom. The defaults live in `/etc/dconf/db/local.d/00-moor`.
-- GNOME Software, PackageKit, and Tracker are removed or masked.
+- GNOME Software, PackageKit, and Tracker are removed or masked. The default
+  session also masks evolution-data-server factories, GNOME Online Accounts,
+  CUPS, Bluetooth, GeoClue, ModemManager, and other VM-idle units (list in
+  `docs/VPS-NESTED-VM.md`). Animations are off. Dash to Dock and WhiteSur stay.
+- Boot menu entry **Moor Linux Lite (Xfce)** for a smaller idle set: Xfce on
+  X11, WhiteSur, Plank. Same ISO; `moor.session=xfce` selects LightDM.
 
 ## Repository layout
 | Path | Purpose |
@@ -35,6 +40,10 @@ app mode.
 | `scripts/boot-test.py` | Headless QEMU boot test: menus, fail-safe, session text, app screenshots |
 | `.github/workflows/build-iso.yml` | CI build |
 | `.github/workflows/boot-test.yml` | Optional QEMU boot test on the built artifact |
+| `docs/VPS-NESTED-VM.md` | Nested QEMU/KVM on a Linux VPS, idle-RAM table, morning steps |
+| `scripts/vps-setup-nested-vm.sh` | Create or remove one Xfce nested VM on an Ubuntu or Debian VPS |
+| `ROADMAP.md` | Later work, including the shared Slatebay dock look |
+| `scripts/idle-ram.py` | QEMU idle-RAM probe (`free -m`, `smem -tk`, three-run median) |
 | `BUILD-NOTES.md` | Detailed build notes, test results, hardware notes |
 
 Themes and the Moor build are **not committed**. They are fetched and built at
@@ -56,6 +65,8 @@ in QEMU (BIOS and UEFI, KVM if available, otherwise TCG) and uploads the boot
 menu, a fail-safe desktop boot, an idle default session (`whoami`, `free -m`,
 `/etc/os-release`), and screenshots of Moor, Files, and Terminal.
 
+`scripts/vps-setup-nested-vm.sh` is shellchecked in that workflow and booted
+from the same ISO artifact (TCG, and KVM when the runner has `/dev/kvm`).
 A build needs about 14 GB of free disk. The standard runner has enough.
 
 ## Build locally
@@ -90,9 +101,8 @@ password `live`.
 - `/__grok/manifest.webmanifest` returns **404**. The PWA manifest route is a
   server route that the static build doesn't have.
 - The Moor page renders slightly shifted to the left.
-- CUPS listens on loopback (harmless, but unneeded in a live session).
-- evolution-data-server runs, because gnome-shell's calendar needs it. About
-  60 MB RSS.
+- evolution-data-server packages stay installed because gnome-shell depends on
+  them. The factory units are masked, so the calendar menu can be empty.
 - The guest clock shows UTC. No timezone is configured.
 - Secure Boot (shim + signed GRUB) is included but untested with an
   SB-enforcing firmware.

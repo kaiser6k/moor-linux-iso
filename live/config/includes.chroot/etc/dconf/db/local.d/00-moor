@@ -30,6 +30,7 @@ icon-theme='WhiteSur-dark'
 cursor-theme='WhiteSur-cursors'
 color-scheme='prefer-dark'
 clock-show-weekday=true
+enable-animations=false
 
 [org/gnome/desktop/wm/preferences]
 button-layout='close,minimize,maximize:'
@@ -48,6 +49,35 @@ idle-delay=uint32 0
 
 [org/gnome/desktop/search-providers]
 disable-external=true
+disabled=['org.gnome.Calendar.desktop', 'org.gnome.Contacts.desktop', 'org.gnome.Software.desktop']
+
+[org/gnome/desktop/privacy]
+remember-recent-files=false
+recent-files-max-age=1
+report-technical-problems=false
+
+[org/gnome/system/location]
+enabled=false
+
+[org/gnome/settings-daemon/plugins/power]
+idle-dim=false
+sleep-inactive-ac-type='nothing'
+sleep-inactive-battery-type='nothing'
+
+[org/gnome/settings-daemon/plugins/color]
+active=false
+
+[org/gnome/settings-daemon/plugins/print-notifications]
+active=false
+
+[org/gnome/settings-daemon/plugins/sharing]
+active=false
+
+[org/gnome/settings-daemon/plugins/smartcard]
+active=false
+
+[org/gnome/settings-daemon/plugins/wacom]
+active=false
 
 [org/freedesktop/tracker/miner/files]
 crawling-interval=-2

@@ -1,0 +1,15 @@
+[Unit]
+Description=Moor display manager
+After=live-config.service systemd-user-sessions.service dbus.service
+Wants=systemd-user-sessions.service
+Conflicts=getty@tty1.service
+
+[Service]
+ExecStart=/usr/local/sbin/moor-display-manager
+Type=simple
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical.target
+Alias=display-manager.service

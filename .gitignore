@@ -16,6 +16,8 @@ chroot/
 binary/
 .build/
 *.iso
+__pycache__/
+*.pyc
 *.hybrid.iso
 *.sha256
 *.contents
