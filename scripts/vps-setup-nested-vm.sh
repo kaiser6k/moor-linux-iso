@@ -15,8 +15,11 @@
 set -euo pipefail
 
 # Paths created before the state file exists. Removed on failure so a
-# half-finished URL download does not stay behind.
+# half-finished URL download does not stay behind. prepare_iso and
+# extract_xfce_boot must run in this shell: a process substitution would
+# keep these notes, and the EXIT trap, in a subshell.
 UNRECORDED=()
+EXTRACT_WORK=
 
 STATE_DIR=/var/lib/moor-nested-vm
 STATE_FILE=$STATE_DIR/state
@@ -80,6 +83,9 @@ note_unrecorded() {
 cleanup_unrecorded() {
   local status=$?
   local path
+  if [[ -n $EXTRACT_WORK ]]; then
+    rm -rf -- "$EXTRACT_WORK" || true
+  fi
   # A written state file means --destroy owns these paths.
   if [[ -f $STATE_FILE ]]; then
     exit "$status"
@@ -531,13 +537,15 @@ prepare_iso() {
   fi
   chmod 0644 "$dest"
   verify_sha "$dest"
-  printf '%s\n%s\n' "$dest" "$owned"
+  ISO_DEST=$dest
+  ISO_OWNED=$owned
 }
 
 extract_xfce_boot() {
   local iso=$1
   local work kernel initrd cmdline linux_path initrd_path
   work=$(mktemp -d)
+  EXTRACT_WORK=$work
   xorriso -osirrox on -indev "$iso" -extract /isolinux/live.cfg "$work/live.cfg" >/dev/null
   linux_path=$(awk '
     $1 == "label" && $2 == "live-xfce" { grab=1; next }
@@ -574,7 +582,10 @@ extract_xfce_boot() {
     -extract "$initrd_path" "$initrd" >/dev/null
   chmod 0644 "$kernel" "$initrd"
   rm -rf "$work"
-  printf '%s\n%s\n%s\n' "$kernel" "$initrd" "$cmdline"
+  EXTRACT_WORK=
+  BOOT_KERNEL=$kernel
+  BOOT_INITRD=$initrd
+  BOOT_CMDLINE=$cmdline
 }
 
 pin_spice_graphics() {
@@ -781,27 +792,29 @@ create_vm() {
     fi
     die "Libvirt already has a domain named ${NAME}, and this script did not record it. Refusing to replace it."
   fi
-  local guest vcpus accel prepared iso_path iso_owned
+  local guest vcpus accel iso_path iso_owned
   guest=$(choose_guest_mib)
   vcpus=$(choose_vcpus)
   accel=$(choose_accel)
-  mapfile -t prepared < <(prepare_iso "$ISO")
-  iso_path=${prepared[0]:-}
-  iso_owned=${prepared[1]:-}
+  prepare_iso "$ISO"
+  iso_path=$ISO_DEST
+  iso_owned=$ISO_OWNED
   if [[ ! -f $iso_path || ( $iso_owned != 0 && $iso_owned != 1 ) ]]; then
     die "Could not prepare the ISO."
   fi
-  local boot_lines kernel initrd cmdline
-  mapfile -t boot_lines < <(extract_xfce_boot "$iso_path")
-  kernel=${boot_lines[0]:-}
-  initrd=${boot_lines[1]:-}
-  cmdline=${boot_lines[2]:-}
+  local kernel initrd cmdline
+  extract_xfce_boot "$iso_path"
+  kernel=$BOOT_KERNEL
+  initrd=$BOOT_INITRD
+  cmdline=$BOOT_CMDLINE
   if [[ ! -f $kernel || ! -f $initrd || -z $cmdline ]]; then
     die "Could not read the Moor Linux Lite (Xfce) boot entry from the ISO."
   fi
   local disk=$IMAGE_DIR/${NAME}.qcow2
-  note_unrecorded "$disk"
   if [[ ! -f $disk ]]; then
+    # Noted only when this run creates it. A disk that was already there
+    # must survive a failure before write_state.
+    note_unrecorded "$disk"
     qemu-img create -f qcow2 "$disk" "${DISK_GB}G"
   fi
   chmod 0644 "$disk"

@@ -498,7 +498,11 @@ jobs:
             grep -q "type='spice'" "graphics-${tag}.txt"
             grep -q '127.0.0.1' "graphics-${tag}.txt"
             grep -q "bus='virtio'" "domain-${tag}.xml"
-            grep -q "<model type='virtio'" "domain-${tag}.xml"
+            # The NIC is also <model type='virtio'>. Require the video device.
+            if ! grep -Pzaoq "<video>[[:space:]]*<model type='virtio'" "domain-${tag}.xml"; then
+              echo "video device is not virtio" >&2
+              exit 1
+            fi
             if [ "$accel" = tcg ]; then
               grep -q '<model fallback=.forbid.>qemu64</model>' "domain-${tag}.xml"
             fi
@@ -598,5 +602,121 @@ jobs:
             shot-*.ppm
             probe-*.txt
             idle-used-*.txt
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # A failed download must not leave the ISO, a .partial, or the kernel,
+  # and must not delete a disk this run did not create.
+  failure-path:
+    needs: [plan, build, publish-iso]
+    if: always() && needs.publish-iso.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download ISO
+        uses: actions/download-artifact@v4
+        with:
+          name: moor-linux-iso
+          path: iso
+
+      - name: Bad SHA and bad URL leave nothing and keep an existing disk
+        run: |
+          set -euo pipefail
+          iso=$(find iso -name '*.iso' -type f | head -n1)
+          test -n "$iso"
+          test -f "$iso"
+          image=/var/lib/libvirt/images/moor-nested
+          sentinel="$PWD/moor-disk-sentinel"
+          printf 'moor-preexisting-disk-v1\n' > "$sentinel"
+          sudo mkdir -p "$image"
+          sudo cp "$sentinel" "$image/moor.qcow2"
+          sudo chmod 0644 "$image/moor.qcow2"
+          bad_sha=0000000000000000000000000000000000000000000000000000000000000000
+          iso_copy="$image/$(basename "$iso")"
+          assert_clean() {
+            sudo cmp "$sentinel" "$image/moor.qcow2"
+            for path in \
+              "$iso_copy" \
+              "${iso_copy}.partial" \
+              "$image/moor-linux.iso" \
+              "$image/moor-linux.iso.partial" \
+              "$image/vmlinuz" \
+              "$image/initrd.img" \
+              /var/lib/moor-nested-vm/state
+            do
+              if sudo test -e "$path"; then
+                echo "leftover after failure: $path" >&2
+                exit 1
+              fi
+            done
+            if sudo find "$image" -name '*.partial' -print | grep -q .; then
+              echo "partial download left behind" >&2
+              sudo find "$image" -name '*.partial' -print >&2
+              exit 1
+            fi
+          }
+          set +e
+          sudo ./scripts/vps-setup-nested-vm.sh --sha256 "$bad_sha" "$iso" >fail-sha.txt 2>&1
+          status=$?
+          set -e
+          cat fail-sha.txt
+          if [ "$status" -eq 0 ]; then
+            echo "bad SHA was accepted" >&2
+            exit 1
+          fi
+          grep -F "SHA256 mismatch for ${iso_copy}" fail-sha.txt
+          assert_clean
+          # A 404 with curl -f never creates the output file. This server
+          # writes 1000 bytes and then closes, which is the failure that
+          # leaves moor-linux.iso.partial behind.
+          python3 - << 'PY' >/tmp/moor-http.log 2>&1 &
+          import socket
+          s = socket.socket()
+          s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+          s.bind(("127.0.0.1", 8765))
+          s.listen(4)
+          s.settimeout(180)
+          try:
+              c, _ = s.accept()
+          except socket.timeout:
+              raise SystemExit("no client")
+          try:
+              c.recv(4096)
+              c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\nConnection: close\r\n\r\n")
+              c.sendall(b"x" * 1000)
+          finally:
+              c.close()
+              s.close()
+          PY
+          http_pid=$!
+          cleanup_http() { kill "$http_pid" >/dev/null 2>&1 || true; }
+          trap cleanup_http EXIT
+          sleep 0.3
+          set +e
+          sudo ./scripts/vps-setup-nested-vm.sh \
+            --sha256 "$bad_sha" \
+            "http://127.0.0.1:8765/no-such-moor.iso" >fail-url.txt 2>&1
+          status=$?
+          set -e
+          cat fail-url.txt
+          if [ "$status" -eq 0 ]; then
+            echo "bad URL was accepted" >&2
+            exit 1
+          fi
+          grep -F 'curl: (18)' fail-url.txt
+          assert_clean
+          cleanup_http
+          trap - EXIT
+
+      - name: Upload failure-path logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vps-setup-failure-path
+          path: |
+            fail-sha.txt
+            fail-url.txt
           retention-days: 14
           if-no-files-found: ignore

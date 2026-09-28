@@ -32,14 +32,29 @@ Write down the MiB number. The script reads that same `MemTotal`, subtracts
 1536 MiB, rounds down to a multiple of 256 MiB, and caps the result at 4096
 MiB. It refuses an automatic size below 1024 MiB unless you pass `--ram`.
 
-Worked outputs of that formula:
+Worked outputs of that formula. The guest is `(MemTotal - 1536)` rounded
+down to a multiple of 256, then capped at 4096. Each band below is 256 MiB
+wide. 2048 MiB is only the 3584–3839 band. Lower `MemTotal` keeps stepping
+down by 256 MiB until the 1024 MiB floor. Below 2560 MiB the script refuses
+to pick a size unless you pass `--ram`.
 
 | Host `MemTotal` | Guest the script chooses |
 |---|---|
+| below 2560 MiB | refuses (under the 1024 MiB floor) |
+| 2560–2815 MiB | 1024 MiB |
+| 2816–3071 MiB | 1280 MiB |
+| 3072–3327 MiB | 1536 MiB |
+| 3328–3583 MiB | 1792 MiB |
+| 3584–3839 MiB | 2048 MiB |
+| 3840–4095 MiB | 2304 MiB |
 | 3891 MiB (a 4 GB VPS) | 2304 MiB |
-| under 3840 MiB, still above the 1024 MiB floor | 2048 MiB |
-| exactly 3840 MiB | 2304 MiB |
-| about 10 GB (10240 MiB) | 4096 MiB, the cap |
+| 4096–4351 MiB | 2560 MiB |
+| 4352–4607 MiB | 2816 MiB |
+| 4608–4863 MiB | 3072 MiB |
+| 4864–5119 MiB | 3328 MiB |
+| 5120–5375 MiB | 3584 MiB |
+| 5376–5631 MiB | 3840 MiB |
+| 5632 MiB and above, including about 10 GB (10240 MiB) | 4096 MiB, the cap |
 
 A count of zero, or no writable `/dev/kvm`, means the script uses TCG and
 prints a warning that the desktop will be slow.
@@ -52,34 +67,52 @@ There is one artifact to download, id `10946214543`, from
 
 [moor-linux-iso artifact 10946214543](https://github.com/kaiser6k/moor-linux-iso/actions/runs/36363113863/artifacts/10946214543)
 
-That page needs a GitHub login. The browser downloads a zip. Unzip it. Inside
-are `moor-linux-amd64.hybrid.iso`, `moor-linux-amd64.hybrid.iso.sha256`, and
-`build-info.txt`.
+That page needs a GitHub login. The browser saves `moor-linux-iso.zip`.
+Inside are `moor-linux-amd64.hybrid.iso`, `moor-linux-amd64.hybrid.iso.sha256`,
+and `build-info.txt`.
 
-From a machine that already has `gh` logged in, the same artifact unpacks
-without a separate unzip:
-
-```sh
-gh run download 36363113863 --repo kaiser6k/moor-linux-iso --name moor-linux-iso --dir moor-iso
-cd moor-iso
-sha256sum -c moor-linux-amd64.hybrid.iso.sha256
-```
-
-The SHA256 of the ISO is:
+The SHA256 of `moor-linux-amd64.hybrid.iso` is:
 
 ```text
 2b0e0b05fff1e145a737f47b02e19004ba40aa574a73bce79b9a9fa9ed8538e6
 ```
 
-Copy the ISO to the VPS (replace `USER` and `YOUR_VPS`):
+On Windows, in PowerShell, from the folder where the zip was saved. This
+checks the hash before the copy. Replace `USER` and `YOUR_VPS`. The ISO lands
+on the VPS as `~/moor-linux-amd64.hybrid.iso`.
+
+```powershell
+Expand-Archive -Path .\moor-linux-iso.zip -DestinationPath .\moor-iso
+$hash = (Get-FileHash -Algorithm SHA256 .\moor-iso\moor-linux-amd64.hybrid.iso).Hash.ToLower()
+if ($hash -ne '2b0e0b05fff1e145a737f47b02e19004ba40aa574a73bce79b9a9fa9ed8538e6') { throw "SHA256 mismatch: $hash" }
+$hash
+scp .\moor-iso\moor-linux-amd64.hybrid.iso USER@YOUR_VPS:~/
+```
+
+On a machine with `unzip` instead of PowerShell:
 
 ```sh
+unzip moor-linux-iso.zip -d moor-iso
+cd moor-iso
+sha256sum -c moor-linux-amd64.hybrid.iso.sha256
 scp moor-linux-amd64.hybrid.iso USER@YOUR_VPS:~/
 ```
 
-On the VPS, fetch the setup script from branch `cursor/vps-nested-vm-ram-6ee6`:
+From a machine that already has `gh` logged in, `gh` unpacks the zip itself:
 
 ```sh
+gh run download 36363113863 --repo kaiser6k/moor-linux-iso --name moor-linux-iso --dir moor-iso
+cd moor-iso
+sha256sum -c moor-linux-amd64.hybrid.iso.sha256
+scp moor-linux-amd64.hybrid.iso USER@YOUR_VPS:~/
+```
+
+On the VPS, from your home directory, fetch the setup script from branch
+`cursor/vps-nested-vm-ram-6ee6`. The later steps call this file as
+`./vps-setup-nested-vm.sh`, and the ISO as `~/moor-linux-amd64.hybrid.iso`.
+
+```sh
+cd
 curl -fL -o vps-setup-nested-vm.sh \
   https://raw.githubusercontent.com/kaiser6k/moor-linux-iso/cursor/vps-nested-vm-ram-6ee6/scripts/vps-setup-nested-vm.sh
 chmod +x vps-setup-nested-vm.sh
@@ -87,7 +120,7 @@ chmod +x vps-setup-nested-vm.sh
 
 On Windows, install Virt Viewer so you have `remote-viewer`. In PowerShell:
 
-```text
+```powershell
 winget install --id RedHat.VirtViewer -e
 ```
 
@@ -98,13 +131,17 @@ After it installs, open Remote Viewer from the Start menu, or run
 ### 3. Dry run, then create the VM
 
 ```sh
-sudo ./scripts/vps-setup-nested-vm.sh --dry-run \
+cd
+sudo ./vps-setup-nested-vm.sh --dry-run \
   --sha256 2b0e0b05fff1e145a737f47b02e19004ba40aa574a73bce79b9a9fa9ed8538e6 \
-  /path/to/moor-linux-amd64.hybrid.iso
+  ~/moor-linux-amd64.hybrid.iso
+```
 
-sudo ./scripts/vps-setup-nested-vm.sh \
+```sh
+cd
+sudo ./vps-setup-nested-vm.sh \
   --sha256 2b0e0b05fff1e145a737f47b02e19004ba40aa574a73bce79b9a9fa9ed8538e6 \
-  /path/to/moor-linux-amd64.hybrid.iso
+  ~/moor-linux-amd64.hybrid.iso
 ```
 
 Read any `WARNING` lines. The script installs QEMU and libvirt if they are
@@ -121,9 +158,10 @@ qcow2. It is attached and not formatted as a persistence volume, so the live
 overlay stays in guest RAM, which is how the idle samples were taken.
 
 Sizing is the table in the pre-checks. A 4 GB VPS whose `MemTotal` is 3891
-MiB gets a 2304 MiB guest. If `MemTotal` is under 3840 MiB the same formula
-lands on 2048 MiB. A host near 10 GB hits the 4096 MiB cap. The script does
-not turn on host swap and does not install host zram. Guest zram is already
+MiB gets a 2304 MiB guest. 2048 MiB is only when `MemTotal` is 3584–3839.
+Below that the guest drops in 256 MiB steps down to the 1024 MiB floor.
+A host at 5632 MiB or more, including one near 10 GB, hits the 4096 MiB cap.
+The script does not turn on host swap and does not install host zram. Guest zram is already
 in the image (`PERCENT=50`). Do not count on the host swapping the QEMU
 process.
 
@@ -156,7 +194,8 @@ firewall, and it does not listen on a public address. Do not open port 5900.
 ### 5. Remove the VM
 
 ```sh
-sudo ./scripts/vps-setup-nested-vm.sh --destroy
+cd
+sudo ./vps-setup-nested-vm.sh --destroy
 ```
 
 That deletes the libvirt domain and the disk, kernel, initrd, and ISO copy
@@ -164,7 +203,7 @@ recorded under `/var/lib/moor-nested-vm` and
 `/var/lib/libvirt/images/moor-nested`. It does not remove an ISO you passed by
 path, and it does not touch other domains.
 
-## 1. See if the VPS can use KVM
+## Nested KVM on the VPS
 
 Run these on the VPS, not inside the guest:
 
@@ -188,7 +227,7 @@ cat /sys/module/kvm_intel/parameters/nested 2>/dev/null || true
 cat /sys/module/kvm_amd/parameters/nested 2>/dev/null || true
 ```
 
-## 2. Software emulation when `/dev/kvm` is missing
+## Software emulation when `/dev/kvm` is missing
 
 QEMU's TCG accelerator needs no `/dev/kvm`. It is the fallback, and it is slow.
 `BUILD-NOTES.md` recorded about 160 seconds to reach a desktop under TCG on the
@@ -209,7 +248,7 @@ Add `-accel tcg,thread=multi` if you want QEMU to use more than one host thread
 for translation. Do not point this at a public port; the display section below
 still applies.
 
-## 3. Boot the ISO
+## Boot the ISO by hand
 
 Virtio devices are in the Debian kernel this ISO already ships (`virtio-net`,
 `virtio-blk`, `virtio-gpu` / `virtio-vga`, `virtio-scsi`). No extra driver ISO.
@@ -316,7 +355,7 @@ hybrid image. A second flavor would build and upload another full ISO. The
 cmdline flag `moor.session=xfce` is enough; `moor-display-manager` starts
 LightDM for that entry and GDM otherwise.
 
-## 4. Reach the desktop
+## Reach the desktop
 
 On your laptop, tunnel to the VPS. The guest port is only on the VPS loopback.
 
@@ -351,7 +390,7 @@ the desktop and a host can talk to the guest agent. The idle samples below
 were taken without a SPICE client attached, so they do not include an active
 SPICE session.
 
-## 5. Firewall
+## Firewall
 
 Binding to `127.0.0.1` is the actual control. A firewall is the backstop for
 the day someone changes that bind. Allow SSH. Do not allow 5900, 5901, or 3389
@@ -455,9 +494,10 @@ not show that a 1024 MiB guest can hold the desktop. A guest smaller than the
 measured `used` value cannot hold that idle set.
 
 On a 4 GB VPS the script does not ask for 4096 MB. The formula in the morning
-steps gives 2304 MiB when `MemTotal` is 3891, and 2048 MiB when `MemTotal` is
-under 3840. On a host near 10 GB the cap is one 4096 MiB guest. Do not start
-a second VM.
+steps gives 2304 MiB when `MemTotal` is 3891. 2048 MiB is only when
+`MemTotal` is 3584–3839; lower values step down by 256 MiB to the 1024 MiB
+floor. On a host at 5632 MiB or more the cap is one 4096 MiB guest. Do not
+start a second VM.
 
 ### Script-path idle RAM at 2304 and 2048
 
