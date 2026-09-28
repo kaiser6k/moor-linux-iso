@@ -467,8 +467,19 @@ sample, not a median of three. The probe waits until `xfce4-session` is
 running, idles 120 seconds, then reads `free -m` used.
 
 <!-- VPS-SIZE-IDLE-START -->
-Not measured yet. The script-test job records `idle-used-2304.txt` and
-`idle-used-2048.txt`.
+Copied from script-test on
+[Build ISO run 36385649159](https://github.com/kaiser6k/moor-linux-iso/actions/runs/36385649159)
+(head `47841b6e846129fc4353b95980f4e25e29246d7c`). The runner had KVM, so
+both boots used `--accel kvm`. One sample each.
+
+| Guest RAM | accel | `free -m` used | samples |
+|---|---|---:|---:|
+| 2304 MiB | kvm | 515 | 1 |
+| 2048 MiB | kvm | 496 | 1 |
+
+Both reached `xfce4-session` before the idle wait. The same job's TCG boot
+(`qemu64`, SPICE, virtio) also reached `xfce4-session`. These are not the
+4096 MiB medians above, and they are not a median of three.
 <!-- VPS-SIZE-IDLE-END -->
 
 ### Swap and zram in the guest
