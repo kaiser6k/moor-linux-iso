@@ -405,15 +405,15 @@ jobs:
 
       - name: Dry run
         run: |
-          set -eu
+          set -euo pipefail
           iso=$(find iso -name '*.iso' -type f | head -n1)
           sha=$(find iso -name '*.sha256' -type f -print0 | xargs -0 cat | awk 'NR==1 { print $1; exit }')
           test -n "$iso"
           test -n "$sha"
-          ./scripts/vps-setup-nested-vm.sh --dry-run --sha256 "$sha" "$iso" | tee dry.txt
+          ./scripts/vps-setup-nested-vm.sh --dry-run --sha256 "$sha" "$iso" 2>&1 | tee dry.txt
           grep -F 'ssh -L ' dry.txt
           grep -F '127.0.0.1' dry.txt
-          ./scripts/vps-setup-nested-vm.sh --dry-run --accel tcg --ram 2048 "$iso" | tee dry-tcg.txt
+          ./scripts/vps-setup-nested-vm.sh --dry-run --accel tcg --ram 2048 "$iso" 2>&1 | tee dry-tcg.txt
           grep -F 'WARNING:' dry-tcg.txt
           grep -F 'MOOR_ACCEL=tcg' dry-tcg.txt
 
