@@ -457,26 +457,33 @@ jobs:
               exit 1
             fi
             grep -q '127.0.0.1' "graphics-${accel}.txt"
+            # libvirt dynamic ownership makes the serial file mode 0600
+            # and owned by libvirt-qemu while the guest is running.
             i=0
             while [ "$i" -lt "$tries" ]; do
-              if grep -q 'login:' "$serial"; then
+              if sudo grep -q 'login:' "$serial"; then
                 echo "login prompt for ${accel} after $((i * 5))s"
                 break
               fi
-              if grep -q 'Unable to find a medium' "$serial"; then
+              if sudo grep -q 'Unable to find a medium' "$serial"; then
                 echo "live medium was not found" >&2
                 exit 1
               fi
               i=$((i + 1))
               sleep 5
             done
-            if ! grep -q 'login:' "$serial"; then
+            sudo cp "$serial" "serial-${accel}.log"
+            sudo chown "$(id -u):$(id -g)" "serial-${accel}.log"
+            sudo chmod 0644 "serial-${accel}.log"
+            if ! sudo grep -q 'login:' "$serial"; then
               echo "timed out waiting for a login prompt on ${accel}" >&2
-              tail -c 12000 "$serial" >&2 || true
+              sudo tail -c 12000 "$serial" >&2 || true
+              sudo virsh screenshot moor "shot-${accel}.ppm" || true
+              sudo chown "$(id -u):$(id -g)" "shot-${accel}.ppm" 2>/dev/null || true
               exit 1
             fi
             sudo virsh screenshot moor "shot-${accel}.ppm" || true
-            cp "$serial" "serial-${accel}.log"
+            sudo chown "$(id -u):$(id -g)" "shot-${accel}.ppm" 2>/dev/null || true
             sudo ./scripts/vps-setup-nested-vm.sh --destroy
             if sudo virsh dominfo moor >/dev/null 2>&1; then
               echo "domain moor still defined after --destroy" >&2
