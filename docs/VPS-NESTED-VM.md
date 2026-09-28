@@ -246,14 +246,20 @@ Method, in GitHub Actions (`baseline-ram` and `idle-ram` in
 
 `smem` is not in the previous main image. When the probe prints `smem not installed`, the smem cell is "n/a" and the ps_mem total is the stand-in the job actually ran. The proc PSS column is the same walk on every profile. Do not treat a missing cell as zero.
 
-The numbers in this table are copied from CI artifacts. They are not estimates.
-If a job failed, the cell says so and the artifact (if any) is named below.
+The numbers in this table are copied from CI artifacts on Build ISO run
+36360884431 (head `b77c1f016782f0be29f4f07b2ad11185cde7c296`). They are not
+estimates. Each profile finished 3/3 boots under KVM. `free -m` reported
+3921 MiB total on every run. The baseline probe printed `smem not installed`
+on all three runs, so that smem cell is n/a. No measurement job failed.
 
 | Profile | used MiB (median) | available MiB (median) | smem PSS MiB (median) | ps_mem MiB (median) | proc PSS MiB (median) | Artifact |
 |---|---:|---:|---:|---:|---:|---|
-| baseline (main ISO, GNOME) | pending | pending | pending | pending | pending | `idle-ram-baseline` |
-| GNOME-lean | pending | pending | pending | pending | pending | `idle-ram-gnome-lean` |
-| Xfce-lite | pending | pending | pending | pending | pending | `idle-ram-xfce-lite` |
+| baseline (main ISO, GNOME) | 778 | 3142 | n/a | 606.4 | 606.4 | `idle-ram-baseline` (10945308092) |
+| GNOME-lean | 739 | 3182 | 562.0 | 544.0 | 544.0 | `idle-ram-gnome-lean` (10946107161) |
+| Xfce-lite | 585 | 3336 | 382.0 | 365.9 | 366.0 | `idle-ram-xfce-lite` (10946142062) |
+
+`used` / `available` by run, in MiB: baseline 778/3142, 782/3138, 772/3148;
+GNOME-lean 739/3182, 741/3180, 737/3183; Xfce-lite 584/3336, 585/3336, 585/3335.
 
 ### Recommended guest RAM
 
@@ -266,19 +272,19 @@ VPS, with this guest running, shows the host with almost nothing available,
 the host is out of room; stop other host processes before raising the guest
 above 4096 MB.
 
-Whether 3072 MB is enough for GNOME-lean or for Xfce-lite is not answered.
-Those two profiles have no measured `used` / `available` / smem figures yet
-(the table above is still pending, and no run has booted at 3072 MB). A guest
-smaller than the measured `used` value cannot hold that idle set. Until the
-medians are filled in from CI, stay at 4096 MB. Matching a future median
-`used` to 3072 MB still would not cover Chromium or a long live session; those
-were not part of the idle sample.
+No run booted at 3072 MB. The idle samples above are the 4096 MB boots.
+Median `used` is 778 MiB on the baseline image, 739 MiB on GNOME-lean, and
+585 MiB on Xfce-lite. Each of those is below 3072, so a 3072 MB guest is
+larger than the idle set that was measured, for every profile. A guest smaller
+than the measured `used` value cannot hold that idle set. Chromium and a long
+live session were not part of the sample. The one-guest plan stays at 4096 MB.
 
 ### Swap and zram in the guest
 
 The image enables `zramswap` with `ALGO=zstd` and `PERCENT=50`
-(`/etc/default/zramswap`). On a 4096 MB guest the zram device is about 2 GB;
-on a 3072 MB guest it would be about 1.5 GB. Zram compresses anonymous pages
+(`/etc/default/zramswap`). On every 4096 MB sample, `free -m` reported
+1960 MiB of swap and 0 MiB used. A 3072 MB guest was not booted; at
+`PERCENT=50` its zram device would be about 1.5 GB. Zram compresses anonymous pages
 into RAM. It does not add memory the host did not give the guest, and it does
 not make a 3 GB guest equal to a 4 GB one. It can absorb a short spike that
 would otherwise be an OOM. Swapped pages still occupy host RAM, just smaller.
