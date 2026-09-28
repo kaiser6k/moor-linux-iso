@@ -69,10 +69,19 @@ require_debian() {
   if [[ ! -r /etc/os-release ]]; then
     die "This script supports Ubuntu and Debian only. /etc/os-release is missing."
   fi
-  # shellcheck disable=SC1091
-  . /etc/os-release
-  local id=${ID:-}
-  local like=${ID_LIKE:-}
+  # Read ID in a subshell. Sourcing os-release here would set NAME=Ubuntu
+  # and overwrite the libvirt domain name.
+  local id like
+  id=$(
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    printf '%s' "${ID:-}"
+  )
+  like=$(
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    printf '%s' "${ID_LIKE:-}"
+  )
   case "$id" in
     ubuntu|debian) return 0 ;;
   esac
@@ -224,6 +233,7 @@ print_plan() {
   echo "vCPUs: ${vcpus}"
   echo "Disk: ${DISK_GB}G sparse qcow2"
   echo "Profile: Moor Linux Lite (Xfce)"
+  echo "Domain: ${NAME}"
   echo "Display: ${DISPLAY} on 127.0.0.1:${PORT}"
   echo "MOOR_ACCEL=${accel}"
   if [[ -n $ISO ]]; then
@@ -442,13 +452,20 @@ verify_sha() {
 }
 
 install_packages() {
+  local pkgs
   export DEBIAN_FRONTEND=noninteractive
   export NEEDRESTART_MODE=a
   apt-get update
-  apt-get install -y --no-install-recommends \
-    qemu-system-x86 qemu-utils \
-    libvirt-daemon-system libvirt-clients virtinst \
+  pkgs=(
+    qemu-system-x86 qemu-utils
+    libvirt-daemon-system libvirt-clients virtinst
     xorriso curl ca-certificates iproute2
+  )
+  # Ubuntu splits SPICE out of qemu-system-x86. Debian may already include it.
+  if apt-cache show qemu-system-modules-spice >/dev/null 2>&1; then
+    pkgs+=(qemu-system-modules-spice)
+  fi
+  apt-get install -y --no-install-recommends "${pkgs[@]}"
   if ! systemctl enable --now libvirtd; then
     systemctl enable --now libvirtd.socket
   fi
