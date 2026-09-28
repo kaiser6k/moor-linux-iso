@@ -8,6 +8,103 @@ through an SSH tunnel.
 There is no installer. The guest boots the ISO. A disk is optional and is only
 for a live-boot persistence overlay.
 
+The profile to run on the VPS is **Moor Linux Lite (Xfce)**. The idle-RAM
+table below is why. `scripts/vps-setup-nested-vm.sh` boots that entry and
+nothing else.
+
+## Morning steps
+
+Run these on the VPS, in this order. The machine is assumed to be Ubuntu or
+Debian. The script exits if it is anything else.
+
+### 1. Check nested KVM
+
+```sh
+grep -E '(vmx|svm)' /proc/cpuinfo | head
+grep -E -c '(vmx|svm)' /proc/cpuinfo
+ls -l /dev/kvm
+```
+
+A count of zero, or no writable `/dev/kvm`, means the script uses TCG and
+prints a warning that the desktop will be slow.
+
+### 2. Get the ISO
+
+Download the `moor-linux-iso` artifact from
+[Build ISO run 36363113863](https://github.com/kaiser6k/moor-linux-iso/actions/runs/36363113863).
+It contains `moor-linux-amd64.hybrid.iso`, the `.sha256` file, and
+`build-info.txt`. Direct artifact link:
+[moor-linux-iso](https://github.com/kaiser6k/moor-linux-iso/actions/runs/36363113863/artifacts/10946214543).
+
+```text
+2b0e0b05fff1e145a737f47b02e19004ba40aa574a73bce79b9a9fa9ed8538e6
+```
+
+That checksum is the SHA256 of `moor-linux-amd64.hybrid.iso` in that artifact.
+Copy `scripts/vps-setup-nested-vm.sh` onto the VPS as well.
+
+### 3. Dry run, then create the VM
+
+```sh
+sudo ./scripts/vps-setup-nested-vm.sh --dry-run \
+  --sha256 2b0e0b05fff1e145a737f47b02e19004ba40aa574a73bce79b9a9fa9ed8538e6 \
+  /path/to/moor-linux-amd64.hybrid.iso
+
+sudo ./scripts/vps-setup-nested-vm.sh \
+  --sha256 2b0e0b05fff1e145a737f47b02e19004ba40aa574a73bce79b9a9fa9ed8538e6 \
+  /path/to/moor-linux-amd64.hybrid.iso
+```
+
+Read any `WARNING` lines. The script installs QEMU and libvirt if they are
+missing, sizes the guest from the host's `MemTotal`, and prints:
+
+```text
+ssh -L 5900:127.0.0.1:5900 USER@YOUR_VPS
+```
+
+Overrides, if you need them: `--ram` MiB, `--disk` GB, `--vcpus` N, or the
+environment variables `MOOR_RAM_MB`, `MOOR_DISK_GB`, and `MOOR_VCPUS`.
+`--accel tcg` forces software emulation. The default disk is a 16 GB sparse
+qcow2. It is attached and not formatted as a persistence volume, so the live
+overlay stays in guest RAM, which is how the idle samples were taken.
+
+Sizing: read `MemTotal`, subtract 1536 MiB for the host OS, `sshd`, and QEMU's
+own overhead, round down to a multiple of 256 MiB, and cap at 4096 MiB. The
+script refuses to go below 1024 MiB unless you pass `--ram`. A host whose
+`MemTotal` is about 10 GB therefore gets one 4096 MB guest. A smaller host,
+including a 4 GB VPS, gets a smaller guest and still keeps that 1536 MiB
+reserve. The script does not turn on host swap and does not install host zram.
+Guest zram is already in the image (`PERCENT=50`). Do not count on the host
+swapping the QEMU process.
+
+### 4. Open the console from Windows
+
+In PowerShell or Command Prompt:
+
+```text
+ssh -L 5900:127.0.0.1:5900 USER@YOUR_VPS
+```
+
+Replace `USER` and `YOUR_VPS` with the SSH login you already use. Then:
+
+```text
+remote-viewer spice://127.0.0.1:5900
+```
+
+The script binds SPICE to `127.0.0.1` only. It does not change `sshd` or the
+firewall, and it does not listen on a public address. Do not open port 5900.
+
+### 5. Remove the VM
+
+```sh
+sudo ./scripts/vps-setup-nested-vm.sh --destroy
+```
+
+That deletes the libvirt domain and the disk, kernel, initrd, and ISO copy
+recorded under `/var/lib/moor-nested-vm` and
+`/var/lib/libvirt/images/moor-nested`. It does not remove an ISO you passed by
+path, and it does not touch other domains.
+
 ## 1. See if the VPS can use KVM
 
 Run these on the VPS, not inside the guest:
@@ -246,38 +343,40 @@ Method, in GitHub Actions (`baseline-ram` and `idle-ram` in
 
 `smem` is not in the previous main image. When the probe prints `smem not installed`, the smem cell is "n/a" and the ps_mem total is the stand-in the job actually ran. The proc PSS column is the same walk on every profile. Do not treat a missing cell as zero.
 
-The numbers in this table are copied from CI artifacts on Build ISO run
-36360884431 (head `b77c1f016782f0be29f4f07b2ad11185cde7c296`). They are not
-estimates. Each profile finished 3/3 boots under KVM. `free -m` reported
-3921 MiB total on every run. The baseline probe printed `smem not installed`
-on all three runs, so that smem cell is n/a. No measurement job failed.
+The numbers in this table are copied from
+[Build ISO run 36363113863](https://github.com/kaiser6k/moor-linux-iso/actions/runs/36363113863)
+on head `0cc4b80819cc3a3d640adc104bb96071a492bae2`. They are not estimates.
+Each profile finished 3/3 boots under KVM. `free -m` reported 3921 MiB total
+on every run. The baseline probe printed `smem not installed` on all three
+runs, so that smem cell is n/a. No measurement job failed.
 
 | Profile | used MiB (median) | available MiB (median) | smem PSS MiB (median) | ps_mem MiB (median) | proc PSS MiB (median) | Artifact |
 |---|---:|---:|---:|---:|---:|---|
-| baseline (main ISO, GNOME) | 778 | 3142 | n/a | 606.4 | 606.4 | `idle-ram-baseline` (10945308092) |
-| GNOME-lean | 739 | 3182 | 562.0 | 544.0 | 544.0 | `idle-ram-gnome-lean` (10946107161) |
-| Xfce-lite | 585 | 3336 | 382.0 | 365.9 | 366.0 | `idle-ram-xfce-lite` (10946142062) |
+| baseline (main ISO, GNOME) | 783 | 3138 | n/a | 608.1 | 608.1 | [idle-ram-baseline](https://github.com/kaiser6k/moor-linux-iso/actions/runs/36363113863/artifacts/10946736528) |
+| GNOME-lean | 740 | 3180 | 564.5 | 546.5 | 546.5 | [idle-ram-gnome-lean](https://github.com/kaiser6k/moor-linux-iso/actions/runs/36363113863/artifacts/10946483866) |
+| Xfce-lite | 581 | 3339 | 381.3 | 365.2 | 365.3 | [idle-ram-xfce-lite](https://github.com/kaiser6k/moor-linux-iso/actions/runs/36363113863/artifacts/10946489018) |
 
-`used` / `available` by run, in MiB: baseline 778/3142, 782/3138, 772/3148;
-GNOME-lean 739/3182, 741/3180, 737/3183; Xfce-lite 584/3336, 585/3336, 585/3335.
+`used` / `available` by run, in MiB: baseline 783/3138, 785/3135, 780/3140;
+GNOME-lean 740/3180, 747/3173, 740/3181; Xfce-lite 573/3347, 595/3325, 581/3339.
 
-### Recommended guest RAM
+### Recommended profile
 
-The VPS plan in view is 10 GB of host RAM and one guest. Give that guest
-4096 MB (`-m 4096` in the command above). That is the only size this method
-boots. It leaves about 6 GB of the 10 GB plan for the host OS, `sshd`, and
-QEMU's own overhead on top of the guest allocation (the 4096 MB sits inside
-the QEMU process). Do not start a second VM on that host. If `free -m` on the
-VPS, with this guest running, shows the host with almost nothing available,
-the host is out of room; stop other host processes before raising the guest
-above 4096 MB.
+Use **Moor Linux Lite (Xfce)** for the one nested guest.
 
-No run booted at 3072 MB. The idle samples above are the 4096 MB boots.
-Median `used` is 778 MiB on the baseline image, 739 MiB on GNOME-lean, and
-585 MiB on Xfce-lite. Each of those is below 3072, so a 3072 MB guest is
-larger than the idle set that was measured, for every profile. A guest smaller
-than the measured `used` value cannot hold that idle set. Chromium and a long
-live session were not part of the sample. The one-guest plan stays at 4096 MB.
+Median `used` is 581 MiB on Xfce-lite, 740 MiB on GNOME-lean, and 783 MiB on
+the baseline image. Median proc PSS is 365.3 MiB, 546.5 MiB, and 608.1 MiB.
+Xfce-lite is the smallest idle set of the three. GNOME-lean is 43 MiB of
+`used` under the baseline (783 to 740). That gap does not change how a 4 GB
+host is split. The Xfce gap does: 202 MiB less `used` than the baseline, and
+159 MiB less than GNOME-lean.
+
+The samples booted at 4096 MB only. No run booted at 3072 MB, and Chromium was
+not in the sample. 581 MiB is below 1024 MiB, which is the smallest guest the
+setup script will choose on its own, so the measured Xfce idle set fits that
+guest. A guest smaller than the measured `used` value cannot hold that idle
+set. On a host with about 10 GB of RAM the script's cap is one 4096 MB guest.
+On today's 4 GB host the same formula leaves 1536 MiB for the host and gives
+the rest, up to that cap, to this one Xfce guest. Do not start a second VM.
 
 ### Swap and zram in the guest
 

@@ -14,6 +14,7 @@ on:
       - ".github/workflows/build-iso.yml"
       - "scripts/idle-ram.py"
       - "scripts/guest-idle-ram.sh"
+      - "scripts/vps-setup-nested-vm.sh"
   pull_request:
     paths:
       - "live/**"
@@ -25,6 +26,7 @@ on:
       - ".github/workflows/build-iso.yml"
       - "scripts/idle-ram.py"
       - "scripts/guest-idle-ram.sh"
+      - "scripts/vps-setup-nested-vm.sh"
 
 concurrency:
   group: build-iso-${{ github.ref }}
@@ -35,7 +37,57 @@ permissions:
   actions: read
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      rebuild: ${{ steps.decide.outputs.rebuild }}
+      iso_run: ${{ steps.decide.outputs.iso_run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether the ISO must be rebuilt
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          branch="${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
+          line=$(gh run list -R "$GITHUB_REPOSITORY" --workflow build-iso.yml --branch "$branch" \
+            --status success --limit 1 --json databaseId,headSha \
+            -q 'if length == 0 then "" else "\(.[0].databaseId) \(.[0].headSha)" end')
+          rebuild=true
+          iso_run=
+          if [ -n "$line" ]; then
+            id=${line%% *}
+            sha=${line#* }
+            echo "Previous successful Build ISO run $id at $sha"
+            if git cat-file -e "${sha}^{commit}" 2>/dev/null; then
+              changed=$(git diff --name-only "$sha" HEAD -- \
+                live scripts/build-moor.sh scripts/stage-themes.sh scripts/lib.sh \
+                patches iso-overrides || true)
+              if [ -z "$changed" ]; then
+                echo "ISO inputs are unchanged. Reusing run $id."
+                rebuild=false
+                iso_run=$id
+              else
+                echo "ISO inputs changed:"
+                printf '%s\n' "$changed"
+              fi
+            else
+              echo "Commit $sha is not in this checkout. Rebuilding."
+            fi
+          else
+            echo "No previous successful Build ISO run on ${branch}. Rebuilding."
+          fi
+          echo "rebuild=$rebuild" >> "$GITHUB_OUTPUT"
+          echo "iso_run=$iso_run" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: plan
+    if: needs.plan.outputs.rebuild == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     # live-build needs chroot, mount and loop devices. The job itself stays on
@@ -153,13 +205,22 @@ jobs:
 
   # Current main ISO, three idle samples. Runs in parallel with the image build.
   baseline-ram:
+    needs: plan
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 50
     steps:
+      - name: Reuse measurements from the previous ISO
+        if: needs.plan.outputs.rebuild != 'true'
+        run: |
+          echo "ISO inputs are unchanged since Build ISO run ${{ needs.plan.outputs.iso_run }}."
+          echo "Baseline medians stay the ones in docs/VPS-NESTED-VM.md from that run."
+
       - uses: actions/checkout@v4
+        if: needs.plan.outputs.rebuild == 'true'
 
       - name: Resolve main build run
+        if: needs.plan.outputs.rebuild == 'true'
         id: run
         env:
           GH_TOKEN: ${{ github.token }}
@@ -171,6 +232,7 @@ jobs:
           echo "id=$id" >> "$GITHUB_OUTPUT"
 
       - name: Download main ISO artifact
+        if: needs.plan.outputs.rebuild == 'true'
         uses: actions/download-artifact@v4
         with:
           name: moor-linux-iso
@@ -179,6 +241,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Install QEMU
+        if: needs.plan.outputs.rebuild == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils python3
@@ -188,17 +251,19 @@ jobs:
           fi
 
       - name: Verify checksum
+        if: needs.plan.outputs.rebuild == 'true'
         working-directory: iso
         run: sha256sum -c *.sha256
 
       - name: Idle RAM (baseline, 3 runs)
+        if: needs.plan.outputs.rebuild == 'true'
         run: |
           iso=$(ls iso/*.iso | head -n1)
           python3 scripts/idle-ram.py --iso "$iso" --profile gnome --label baseline \
             --runs 3 --settle 120 --out idle-ram
 
       - name: Upload idle RAM raw output
-        if: always()
+        if: always() && needs.plan.outputs.rebuild == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: idle-ram-baseline
@@ -208,7 +273,11 @@ jobs:
 
   # GNOME-lean (default entry) and Xfce-lite on the ISO this workflow just built.
   idle-ram:
-    needs: build
+    needs: [plan, build]
+    if: >
+      always() &&
+      needs.plan.result == 'success' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 50
     strategy:
@@ -220,15 +289,24 @@ jobs:
           - profile: xfce
             label: xfce-lite
     steps:
+      - name: Reuse measurements from the previous ISO
+        if: needs.plan.outputs.rebuild != 'true'
+        run: |
+          echo "ISO inputs are unchanged since Build ISO run ${{ needs.plan.outputs.iso_run }}."
+          echo "${{ matrix.label }} medians stay the ones in docs/VPS-NESTED-VM.md from that run."
+
       - uses: actions/checkout@v4
+        if: needs.plan.outputs.rebuild == 'true'
 
       - name: Download ISO artifact
+        if: needs.plan.outputs.rebuild == 'true'
         uses: actions/download-artifact@v4
         with:
           name: moor-linux-iso
           path: iso
 
       - name: Install QEMU
+        if: needs.plan.outputs.rebuild == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils python3
@@ -238,20 +316,195 @@ jobs:
           fi
 
       - name: Verify checksum
+        if: needs.plan.outputs.rebuild == 'true'
         working-directory: iso
         run: sha256sum -c *.sha256
 
       - name: Idle RAM (${{ matrix.label }}, 3 runs)
+        if: needs.plan.outputs.rebuild == 'true'
         run: |
           iso=$(ls iso/*.iso | head -n1)
           python3 scripts/idle-ram.py --iso "$iso" --profile ${{ matrix.profile }} \
             --label ${{ matrix.label }} --runs 3 --settle 120 --out idle-ram
 
       - name: Upload idle RAM raw output
-        if: always()
+        if: always() && needs.plan.outputs.rebuild == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: idle-ram-${{ matrix.label }}
           path: idle-ram/
           retention-days: 14
           if-no-files-found: warn
+
+  # Re-publish the previous ISO when this commit does not change the image,
+  # so boot-test and script-test can download moor-linux-iso from this run.
+  publish-iso:
+    needs: [plan, build]
+    if: >
+      always() &&
+      needs.plan.result == 'success' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Download the previous ISO
+        if: needs.plan.outputs.rebuild != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: moor-linux-iso
+          path: iso
+          run-id: ${{ needs.plan.outputs.iso_run }}
+          github-token: ${{ github.token }}
+
+      - name: Stage and verify the reused ISO
+        if: needs.plan.outputs.rebuild != 'true'
+        run: |
+          set -eu
+          mkdir -p flat
+          find iso -type f \( -name '*.iso' -o -name '*.sha256' -o -name 'build-info.txt' \) -exec cp -t flat {} +
+          (cd flat && sha256sum -c *.sha256)
+          ls -l flat
+
+      - name: Upload the reused ISO
+        if: needs.plan.outputs.rebuild != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: moor-linux-iso
+          path: |
+            flat/*.iso
+            flat/*.sha256
+            flat/build-info.txt
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: This run built the ISO
+        if: needs.plan.outputs.rebuild == 'true'
+        run: echo "The build job uploaded moor-linux-iso."
+
+  script-test:
+    needs: [plan, build, publish-iso]
+    if: always() && needs.publish-iso.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download ISO
+        uses: actions/download-artifact@v4
+        with:
+          name: moor-linux-iso
+          path: iso
+
+      - name: Shellcheck
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+          shellcheck -s bash scripts/vps-setup-nested-vm.sh
+
+      - name: Dry run
+        run: |
+          set -eu
+          iso=$(find iso -name '*.iso' -type f | head -n1)
+          sha=$(find iso -name '*.sha256' -type f -print0 | xargs -0 cat | awk 'NR==1 { print $1; exit }')
+          test -n "$iso"
+          test -n "$sha"
+          ./scripts/vps-setup-nested-vm.sh --dry-run --sha256 "$sha" "$iso" | tee dry.txt
+          grep -F 'ssh -L ' dry.txt
+          grep -F '127.0.0.1' dry.txt
+          ./scripts/vps-setup-nested-vm.sh --dry-run --accel tcg --ram 2048 "$iso" | tee dry-tcg.txt
+          grep -F 'WARNING:' dry-tcg.txt
+          grep -F 'MOOR_ACCEL=tcg' dry-tcg.txt
+
+      - name: Boot on TCG and on KVM when /dev/kvm is usable
+        run: |
+          set -euo pipefail
+          iso=$(find iso -name '*.iso' -type f | head -n1)
+          sha=$(find iso -name '*.sha256' -type f -print0 | xargs -0 cat | awk 'NR==1 { print $1; exit }')
+          serial="$PWD/moor-serial.log"
+          : > "$serial"
+          have_kvm=0
+          if [ -e /dev/kvm ] && sudo test -r /dev/kvm && sudo test -w /dev/kvm \
+              && grep -E -q '(vmx|svm)' /proc/cpuinfo; then
+            have_kvm=1
+          fi
+          echo "have_kvm=$have_kvm"
+          cleanup() {
+            sudo ./scripts/vps-setup-nested-vm.sh --destroy || true
+          }
+          trap cleanup EXIT
+          run_one() {
+            accel=$1
+            tries=$2
+            sudo ./scripts/vps-setup-nested-vm.sh \
+              --accel "$accel" \
+              --sha256 "$sha" \
+              --serial-log "$serial" \
+              "$iso" | tee "run-${accel}.log"
+            grep -q "^MOOR_ACCEL=${accel}$" "run-${accel}.log"
+            echo "--- listeners ---"
+            sudo ss -H -ltn 'sport = :5900' | tee "listen-${accel}.txt"
+            if grep -E '0\.0\.0\.0:5900|\*:5900|\[::\]:5900' "listen-${accel}.txt"; then
+              echo "console is not localhost-only" >&2
+              exit 1
+            fi
+            grep -q '127.0.0.1:5900' "listen-${accel}.txt"
+            sudo virsh dumpxml moor > "domain-${accel}.xml"
+            awk '/<graphics /,/<\/graphics>/' "domain-${accel}.xml" > "graphics-${accel}.txt"
+            if grep -E "0\\.0\\.0\\.0|listen='::'|address='::'" "graphics-${accel}.txt"; then
+              echo "domain XML is not localhost-only" >&2
+              exit 1
+            fi
+            grep -q '127.0.0.1' "graphics-${accel}.txt"
+            i=0
+            while [ "$i" -lt "$tries" ]; do
+              if grep -q 'login:' "$serial"; then
+                echo "login prompt for ${accel} after $((i * 5))s"
+                break
+              fi
+              if grep -q 'Unable to find a medium' "$serial"; then
+                echo "live medium was not found" >&2
+                exit 1
+              fi
+              i=$((i + 1))
+              sleep 5
+            done
+            if ! grep -q 'login:' "$serial"; then
+              echo "timed out waiting for a login prompt on ${accel}" >&2
+              tail -c 12000 "$serial" >&2 || true
+              exit 1
+            fi
+            sudo virsh screenshot moor "shot-${accel}.ppm" || true
+            cp "$serial" "serial-${accel}.log"
+            sudo ./scripts/vps-setup-nested-vm.sh --destroy
+            if sudo virsh dominfo moor >/dev/null 2>&1; then
+              echo "domain moor still defined after --destroy" >&2
+              exit 1
+            fi
+            if sudo ss -H -ltn 'sport = :5900' | grep -q ':5900'; then
+              echo "port 5900 still open after --destroy" >&2
+              exit 1
+            fi
+          }
+          run_one tcg 240
+          if [ "$have_kvm" -eq 1 ]; then
+            run_one kvm 120
+          fi
+
+      - name: Upload script-test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vps-setup-test
+          path: |
+            dry.txt
+            dry-tcg.txt
+            run-*.log
+            listen-*.txt
+            domain-*.xml
+            graphics-*.txt
+            serial-*.log
+            shot-*.ppm
+          retention-days: 14
+          if-no-files-found: ignore
