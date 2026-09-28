@@ -41,6 +41,7 @@ app mode.
 | `.github/workflows/build-iso.yml` | CI build |
 | `.github/workflows/boot-test.yml` | Optional QEMU boot test on the built artifact |
 | `docs/VPS-NESTED-VM.md` | Nested QEMU/KVM on a Linux VPS, idle-RAM table |
+| `ROADMAP.md` | Later work, including the shared Slatebay dock look |
 | `scripts/idle-ram.py` | QEMU idle-RAM probe (`free -m`, `smem -tk`, three-run median) |
 | `BUILD-NOTES.md` | Detailed build notes, test results, hardware notes |
 
