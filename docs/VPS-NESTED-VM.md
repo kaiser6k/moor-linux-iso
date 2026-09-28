@@ -257,7 +257,34 @@ If a job failed, the cell says so and the artifact (if any) is named below.
 
 ### Recommended guest RAM
 
-Filled in with the medians above once CI has them. The only size this method
-has booted is 4096 MB. A guest smaller than the measured `used` figure cannot
-hold that idle set; a tighter size than 4096 MB has not been measured, so it
-is not recommended here.
+The VPS plan in view is 10 GB of host RAM and one guest. Give that guest
+4096 MB (`-m 4096` in the command above). That is the only size this method
+boots. It leaves about 6 GB of the 10 GB plan for the host OS, `sshd`, and
+QEMU's own overhead on top of the guest allocation (the 4096 MB sits inside
+the QEMU process). Do not start a second VM on that host. If `free -m` on the
+VPS, with this guest running, shows the host with almost nothing available,
+the host is out of room; stop other host processes before raising the guest
+above 4096 MB.
+
+Whether 3072 MB is enough for GNOME-lean or for Xfce-lite is not answered.
+Those two profiles have no measured `used` / `available` / smem figures yet
+(the table above is still pending, and no run has booted at 3072 MB). A guest
+smaller than the measured `used` value cannot hold that idle set. Until the
+medians are filled in from CI, stay at 4096 MB. Matching a future median
+`used` to 3072 MB still would not cover Chromium or a long live session; those
+were not part of the idle sample.
+
+### Swap and zram in the guest
+
+The image enables `zramswap` with `ALGO=zstd` and `PERCENT=50`
+(`/etc/default/zramswap`). On a 4096 MB guest the zram device is about 2 GB;
+on a 3072 MB guest it would be about 1.5 GB. Zram compresses anonymous pages
+into RAM. It does not add memory the host did not give the guest, and it does
+not make a 3 GB guest equal to a 4 GB one. It can absorb a short spike that
+would otherwise be an OOM. Swapped pages still occupy host RAM, just smaller.
+
+The idle samples use no persistence disk, so the live overlay is also in guest
+RAM and competes with zram. There is no disk swap in those samples. On the
+VPS, do not count on the host swapping the QEMU process; that stalls the whole
+guest. Host swap is a backstop, not the sizing plan. The ~6 GB left after the
+4 GB guest is what should keep the host out of swap.
