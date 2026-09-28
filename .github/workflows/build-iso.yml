@@ -468,6 +468,8 @@ jobs:
             tries=$2
             ram=$3
             tag=$4
+            # The previous guest leaves this file owned by libvirt-qemu, mode 0600.
+            sudo rm -f "$serial"
             : > "$serial"
             ram_args=()
             if [ -n "$ram" ]; then
