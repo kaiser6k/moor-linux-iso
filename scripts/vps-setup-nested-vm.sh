@@ -619,23 +619,27 @@ path, log_path = sys.argv[1], sys.argv[2]
 if "'" in log_path:
     sys.exit("serial log path cannot contain a single quote")
 text = open(path, encoding="utf-8").read()
-match = re.search(r"<serial\b[^>]*>", text)
+match = re.search(r"<serial\b[^>]*/>", text) or re.search(r"<serial\b[^>]*>", text)
 if not match:
     sys.exit("domain XML has no serial element")
 tag = match.group(0)
-if tag.endswith("/>"):
-    sys.exit("serial element has no body")
 if re.search(r"\btype=(['\"])pty\1", tag) is None:
     tag = re.sub(r"\btype=(['\"])[^'\"]+\1", "type='pty'", tag, count=1)
+log = "<log file='%s' append='off'/>" % log_path
+if tag.endswith("/>"):
+    # virt-install emits <serial type='pty'/> with no child for a log file.
+    open_tag = tag[:-2].rstrip() + ">"
+    replacement = open_tag + "\n      " + log + "\n    </serial>"
+    text = text[: match.start()] + replacement + text[match.end() :]
+else:
     text = text[: match.start()] + tag + text[match.end() :]
-    match = re.search(r"<serial\b[^>]*>", text)
-end = text.find("</serial>", match.end())
-if end < 0:
-    sys.exit("serial element is not closed")
-body = text[match.end() : end]
-if "<log " not in body:
-    insert = "\n      <log file='%s' append='off'/>" % log_path
-    text = text[: match.end()] + insert + text[match.end() :]
+    end = text.find("</serial>", match.start())
+    if end < 0:
+        sys.exit("serial element is not closed")
+    body = text[match.end() : end]
+    if "<log " not in body:
+        insert_at = match.start() + len(tag)
+        text = text[:insert_at] + "\n      " + log + text[insert_at:]
 open(path, "w", encoding="utf-8").write(text)
 PY
 }
